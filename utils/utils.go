@@ -1,8 +1,13 @@
 package utils
 
+// Copyright (c) 2026 LingByte
+// SPDX-License-Identifier: MIT
+
 import (
 	"errors"
+	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"sync"
 	"time"
@@ -97,4 +102,25 @@ func getMachineID() int64 {
 		return 1
 	}
 	return mid
+}
+
+// ReadFile read file
+func ReadFile(filename string) ([]byte, error) {
+	return os.ReadFile(filename)
+}
+
+// WriteFile write file
+func WriteFile(filename string, data []byte) error {
+	// Ensure directory exists
+	dir := filepath.Dir(filename)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return fmt.Errorf("failed to create directory: %w", err)
+	}
+
+	// Write file
+	if err := os.WriteFile(filename, data, 0644); err != nil {
+		return fmt.Errorf("failed to write file: %w", err)
+	}
+
+	return nil
 }

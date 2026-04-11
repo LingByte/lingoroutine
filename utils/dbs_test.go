@@ -1,5 +1,8 @@
 package utils
 
+// Copyright (c) 2026 LingByte
+// SPDX-License-Identifier: MIT
+
 import (
 	"os"
 	"testing"

@@ -2,6 +2,9 @@
 
 package utils
 
+// Copyright (c) 2026 LingByte
+// SPDX-License-Identifier: MIT
+
 import (
 	"gorm.io/driver/mysql"
 	"gorm.io/gorm"

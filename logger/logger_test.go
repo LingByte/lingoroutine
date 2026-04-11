@@ -1,5 +1,8 @@
 package logger
 
+// Copyright (c) 2026 LingByte
+// SPDX-License-Identifier: MIT
+
 import (
 	"bufio"
 	"bytes"
