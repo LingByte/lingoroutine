@@ -3,7 +3,7 @@ package text
 import (
 	"testing"
 
-	"github.com/LingByte/LingStorage/pkg/utils"
+	"github.com/LingByte/lingoroutine/utils"
 )
 
 func TestNewQCloudTextCensor(t *testing.T) {

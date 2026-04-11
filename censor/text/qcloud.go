@@ -4,17 +4,13 @@ import (
 	"encoding/base64"
 	"fmt"
 
-	"github.com/LingByte/LingStorage/pkg/utils"
+	"github.com/LingByte/lingoroutine/utils"
 	"github.com/tencentcloud/tencentcloud-sdk-go/tencentcloud/common"
 	"github.com/tencentcloud/tencentcloud-sdk-go/tencentcloud/common/profile"
 	tms "github.com/tencentcloud/tencentcloud-sdk-go/tencentcloud/tms/v20201229"
 )
 
 const (
-	// QCloud default region
-	QCloudDefaultRegion = "ap-guangzhou"
-	// QCloud TMS endpoint
-	QCloudTMSEndpoint = "tms.tencentcloudapi.com"
 	// QCloud suggestion values (from API response)
 	QCloudSuggestionPass   = "Pass"
 	QCloudSuggestionReview = "Review"

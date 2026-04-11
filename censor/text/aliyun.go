@@ -4,19 +4,15 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/LingByte/LingStorage/pkg/utils"
+	"github.com/LingByte/lingoroutine/utils"
 	"github.com/alibabacloud-go/darabonba-openapi/v2/client"
 	green "github.com/alibabacloud-go/green-20220302/v2/client"
 	"github.com/alibabacloud-go/tea/tea"
 )
 
 const (
-	// Aliyun default endpoint
-	AliyunDefaultEndpoint = "green-cip.cn-shanghai.aliyuncs.com"
 	// Aliyun service type for text moderation
 	AliyunServiceChatDetection = "chat_detection"
-	// Aliyun success code
-	AliyunSuccessCode = 200
 	// Aliyun high-risk labels that result in block
 	AliyunHighRiskLabelTerrorism  = "terrorism"
 	AliyunHighRiskLabelPorn       = "porn"
