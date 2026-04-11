@@ -4,7 +4,6 @@ package logger
 // SPDX-License-Identifier: MIT
 
 import (
-	"fmt"
 	"os"
 	"path/filepath"
 	"time"
@@ -114,33 +113,33 @@ func getLogWriter(filename string, maxSize, maxBackup, maxAge int, daily bool) z
 }
 
 // Info 通用 info 日志方法
-func Info(format string, a ...any) {
-	Lg.Info(fmt.Sprintf(format, a))
+func Info(msg string, fields ...zap.Field) {
+	Lg.Info(msg, fields...)
 }
 
 // Warn 通用 warn 日志方法
-func Warn(format string, a ...any) {
-	Lg.Warn(fmt.Sprintf(format, a))
+func Warn(msg string, fields ...zap.Field) {
+	Lg.Warn(msg, fields...)
 }
 
 // Error 通用 error 日志方法
-func Error(format string, a ...any) {
-	Lg.Error(fmt.Sprintf(format, a))
+func Error(msg string, fields ...zap.Field) {
+	Lg.Error(msg, fields...)
 }
 
 // Debug 通用 debug 日志方法
-func Debug(format string, a ...any) {
-	Lg.Debug(fmt.Sprintf(format, a))
+func Debug(msg string, fields ...zap.Field) {
+	Lg.Debug(msg, fields...)
 }
 
 // Fatal 通用 fatal 日志方法
-func Fatal(format string, a ...any) {
-	Lg.Fatal(fmt.Sprintf(format, a))
+func Fatal(msg string, fields ...zap.Field) {
+	Lg.Fatal(msg, fields...)
 }
 
 // Panic 通用 panic 日志方法
-func Panic(format string, a ...any) {
-	Lg.Panic(fmt.Sprintf(format, a))
+func Panic(msg string, fields ...zap.Field) {
+	Lg.Panic(msg, fields...)
 }
 
 // Sync 刷新缓冲区
