@@ -80,6 +80,21 @@ func (h *CozeHandler) QueryWithOptions(text string, options *QueryOptions) (*Que
 		options = &QueryOptions{}
 	}
 	model := strings.TrimSpace(options.Model)
+
+	var expansion *QueryExpansion
+	if options.EnableQueryExpansion {
+		expanded, terms, err := h.expandQueryCoze(h.ctx, text, options)
+		if err == nil {
+			expansion = &QueryExpansion{
+				Original: text,
+				Expanded: expanded,
+				Terms:    terms,
+				Debug:    map[string]any{},
+			}
+			text = expanded
+		}
+	}
+
 	msgs := h.cozeMessagesForChat(text, options)
 	streamFlag := false
 	req := &coze.CreateChatsReq{
@@ -119,9 +134,10 @@ func (h *CozeHandler) QueryWithOptions(text string, options *QueryOptions) (*Que
 	answer := strings.TrimSpace(out.String())
 	h.mem.appendPairAndMaybeSummarize(ctx, model, text, answer, h.summarizeCoze)
 	return &QueryResponse{
-		Provider: h.Provider(),
-		Model:    options.Model,
-		Choices:  []QueryChoice{{Index: 0, Content: answer, FinishReason: "stop"}},
+		Provider:  h.Provider(),
+		Model:     options.Model,
+		Choices:   []QueryChoice{{Index: 0, Content: answer, FinishReason: "stop"}},
+		Expansion: expansion,
 	}, nil
 }
 
@@ -130,6 +146,12 @@ func (h *CozeHandler) QueryStream(text string, options *QueryOptions, callback f
 		options = &QueryOptions{}
 	}
 	model := strings.TrimSpace(options.Model)
+	if options.EnableQueryExpansion {
+		expanded, _, err := h.expandQueryCoze(h.ctx, text, options)
+		if err == nil {
+			text = expanded
+		}
+	}
 	msgs := h.cozeMessagesForChat(text, options)
 	streamFlag := true
 	req := &coze.CreateChatsReq{
@@ -241,6 +263,50 @@ func (h *CozeHandler) cozeMessagesForChat(userText string, opts *QueryOptions) [
 	}
 	out = append(out, coze.Message{Role: coze.MessageRoleUser, Content: userText})
 	return out
+}
+
+func (h *CozeHandler) expandQueryCoze(ctx context.Context, text string, options *QueryOptions) (string, []string, error) {
+	if options == nil {
+		options = &QueryOptions{}
+	}
+	maxTerms := expansionMaxTerms(options)
+	sep := expansionSeparator(options)
+	prompt := BuildQueryExpansionUserPrompt(text, maxTerms)
+	streamFlag := false
+	req := &coze.CreateChatsReq{
+		BotID:  h.botID,
+		UserID: h.userID + "_ling_expand",
+		Messages: []*coze.Message{
+			{Role: coze.MessageRoleUser, Content: prompt},
+		},
+		Stream: &streamFlag,
+	}
+	sctx, cancel := context.WithTimeout(ctx, 90*time.Second)
+	defer cancel()
+	stream, err := h.client.Chat.Stream(sctx, req)
+	if err != nil {
+		return "", nil, err
+	}
+	defer stream.Close()
+	var out strings.Builder
+	for {
+		ev, err := stream.Recv()
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			return "", nil, err
+		}
+		if ev.Message != nil && ev.Message.Content != "" {
+			out.WriteString(ev.Message.Content)
+		}
+		if ev.IsDone() || ev.Event == coze.ChatEventConversationMessageCompleted {
+			break
+		}
+	}
+	answer := strings.TrimSpace(out.String())
+	expanded, terms := ExpandedQueryFromModelAnswer(text, answer, maxTerms, sep)
+	return expanded, terms, nil
 }
 
 func (h *CozeHandler) summarizeCoze(ctx context.Context, model string, transcript string, previousSummary string) (string, error) {

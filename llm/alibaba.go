@@ -140,11 +140,12 @@ func (h *AlibabaHandler) QueryWithOptions(text string, options *QueryOptions) (*
 		return nil, err
 	}
 	answer := strings.TrimSpace(parsed.Output.Text)
-	h.mem.appendPairAndMaybeSummarize(h.ctx, model, text, answer, h.summarizeAlibaba)
+	h.mem.appendPairAndMaybeSummarize(h.ctx, model, promptUser, answer, h.summarizeAlibaba)
 	return &QueryResponse{
-		Provider: h.Provider(),
-		Model:    options.Model,
-		Choices:  []QueryChoice{{Index: 0, Content: answer, FinishReason: "stop"}},
+		Provider:  h.Provider(),
+		Model:     options.Model,
+		Choices:   []QueryChoice{{Index: 0, Content: answer, FinishReason: "stop"}},
+		Expansion: expansion,
 	}, nil
 }
 
@@ -227,6 +228,52 @@ func (h *AlibabaHandler) composePrompt(currentUser string, opts *QueryOptions) s
 		return currentUser
 	}
 	return out
+}
+
+func (h *AlibabaHandler) expandQueryAlibaba(ctx context.Context, text string, options *QueryOptions) (string, []string, error) {
+	if options == nil {
+		options = &QueryOptions{}
+	}
+	maxTerms := expansionMaxTerms(options)
+	sep := expansionSeparator(options)
+	prompt := BuildQueryExpansionUserPrompt(text, maxTerms)
+	reqBody := map[string]any{
+		"input": map[string]string{
+			"prompt": prompt,
+		},
+		"parameters": map[string]any{},
+	}
+	b, err := json.Marshal(reqBody)
+	if err != nil {
+		return "", nil, err
+	}
+	url := fmt.Sprintf("%s/api/v1/apps/%s/completion", strings.TrimRight(h.endpoint, "/"), h.appID)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(b))
+	if err != nil {
+		return "", nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+h.apiKey)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := h.client.Do(req)
+	if err != nil {
+		return "", nil, err
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return "", nil, fmt.Errorf("alibaba expansion failed: status=%d body=%s", resp.StatusCode, string(body))
+	}
+	var parsed struct {
+		Output struct {
+			Text string `json:"text"`
+		} `json:"output"`
+	}
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		return "", nil, err
+	}
+	out := strings.TrimSpace(parsed.Output.Text)
+	expanded, terms := ExpandedQueryFromModelAnswer(text, out, maxTerms, sep)
+	return expanded, terms, nil
 }
 
 func (h *AlibabaHandler) summarizeAlibaba(ctx context.Context, model string, transcript string, previousSummary string) (string, error) {
