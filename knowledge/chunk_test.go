@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/LingByte/lingoroutine/llm"
+	"github.com/LingByte/lingoroutine/utils"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -68,4 +69,38 @@ func TestLLMChunker_Chunk_NoiseAroundJSON(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, 1, len(chunks))
 	assert.Equal(t, "A", chunks[0].Title)
+}
+
+func TestLLMChunker_Chunk_ChunksObject(t *testing.T) {
+	c := &LLMChunker{LLM: &fakeChunkLLM{resp: `{"chunks":[{"title":"S1","text":"one"},{"title":"S2","text":"two"}]}`}}
+	chunks, err := c.Chunk(context.Background(), "input", &ChunkOptions{MaxChars: 100})
+	assert.NoError(t, err)
+	assert.Equal(t, 2, len(chunks))
+	assert.Equal(t, "one", chunks[0].Text)
+}
+
+func TestLLMChunker_Chunk_BracketInsideText(t *testing.T) {
+	raw := `{"chunks":[{"title":"A","text":"see ] not end"}]}`
+	c := &LLMChunker{LLM: &fakeChunkLLM{resp: raw}}
+	chunks, err := c.Chunk(context.Background(), "input", &ChunkOptions{MaxChars: 100})
+	assert.NoError(t, err)
+	assert.Equal(t, 1, len(chunks))
+	assert.Equal(t, "see ] not end", chunks[0].Text)
+}
+
+func TestLLMChunker_Chunk_CleanTextInvalidUTF8(t *testing.T) {
+	c := &LLMChunker{LLM: &fakeChunkLLM{resp: `{"chunks":[{"title":"A","text":"ok"}]}`}}
+	chunks, err := c.Chunk(context.Background(), "pre\xffpost", nil)
+	assert.NoError(t, err)
+	assert.Equal(t, 1, len(chunks))
+}
+
+func TestLLMChunker_Chunk_PreChunkCleanOverride(t *testing.T) {
+	c := &LLMChunker{LLM: &fakeChunkLLM{resp: `{"chunks":[{"title":"A","text":"ok"}]}`}}
+	chunks, err := c.Chunk(context.Background(), "# H1\n\nbody", &ChunkOptions{
+		MaxChars:      100,
+		PreChunkClean: &utils.Options{},
+	})
+	assert.NoError(t, err)
+	assert.Len(t, chunks, 1)
 }
