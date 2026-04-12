@@ -81,6 +81,16 @@ func (h *CozeHandler) QueryWithOptions(text string, options *QueryOptions) (*Que
 	}
 	model := strings.TrimSpace(options.Model)
 
+	var rewrite *QueryRewrite
+	if options.EnableQueryRewrite {
+		before := text
+		rw, err := h.rewriteQueryCoze(h.ctx, before, options)
+		if err == nil && rw != "" {
+			rewrite = &QueryRewrite{Original: before, Rewritten: rw}
+			text = rw
+		}
+	}
+
 	var expansion *QueryExpansion
 	if options.EnableQueryExpansion {
 		expanded, terms, err := h.expandQueryCoze(h.ctx, text, options)
@@ -138,6 +148,7 @@ func (h *CozeHandler) QueryWithOptions(text string, options *QueryOptions) (*Que
 		Model:     options.Model,
 		Choices:   []QueryChoice{{Index: 0, Content: answer, FinishReason: "stop"}},
 		Expansion: expansion,
+		Rewrite:   rewrite,
 	}, nil
 }
 
@@ -146,9 +157,25 @@ func (h *CozeHandler) QueryStream(text string, options *QueryOptions, callback f
 		options = &QueryOptions{}
 	}
 	model := strings.TrimSpace(options.Model)
+	var streamRewrite *QueryRewrite
+	if options.EnableQueryRewrite {
+		before := text
+		rw, err := h.rewriteQueryCoze(h.ctx, before, options)
+		if err == nil && rw != "" {
+			streamRewrite = &QueryRewrite{Original: before, Rewritten: rw}
+			text = rw
+		}
+	}
+	var streamExpansion *QueryExpansion
 	if options.EnableQueryExpansion {
-		expanded, _, err := h.expandQueryCoze(h.ctx, text, options)
+		expanded, terms, err := h.expandQueryCoze(h.ctx, text, options)
 		if err == nil {
+			streamExpansion = &QueryExpansion{
+				Original: text,
+				Expanded: expanded,
+				Terms:    terms,
+				Debug:    map[string]any{},
+			}
 			text = expanded
 		}
 	}
@@ -202,9 +229,11 @@ func (h *CozeHandler) QueryStream(text string, options *QueryOptions, callback f
 	answer := strings.TrimSpace(out.String())
 	h.mem.appendPairAndMaybeSummarize(ctx, model, text, answer, h.summarizeCoze)
 	return &QueryResponse{
-		Provider: h.Provider(),
-		Model:    options.Model,
-		Choices:  []QueryChoice{{Index: 0, Content: answer, FinishReason: "stop"}},
+		Provider:  h.Provider(),
+		Model:     options.Model,
+		Choices:   []QueryChoice{{Index: 0, Content: answer, FinishReason: "stop"}},
+		Rewrite:   streamRewrite,
+		Expansion: streamExpansion,
 	}, nil
 }
 
@@ -263,6 +292,50 @@ func (h *CozeHandler) cozeMessagesForChat(userText string, opts *QueryOptions) [
 	}
 	out = append(out, coze.Message{Role: coze.MessageRoleUser, Content: userText})
 	return out
+}
+
+func (h *CozeHandler) rewriteQueryCoze(ctx context.Context, text string, options *QueryOptions) (string, error) {
+	if options == nil {
+		options = &QueryOptions{}
+	}
+	prompt := BuildQueryRewriteUserPrompt(text, options.QueryRewriteInstruction)
+	streamFlag := false
+	req := &coze.CreateChatsReq{
+		BotID:  h.botID,
+		UserID: h.userID + "_ling_rewrite",
+		Messages: []*coze.Message{
+			{Role: coze.MessageRoleUser, Content: prompt},
+		},
+		Stream: &streamFlag,
+	}
+	sctx, cancel := context.WithTimeout(ctx, 90*time.Second)
+	defer cancel()
+	stream, err := h.client.Chat.Stream(sctx, req)
+	if err != nil {
+		return "", err
+	}
+	defer stream.Close()
+	var out strings.Builder
+	for {
+		ev, err := stream.Recv()
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			return "", err
+		}
+		if ev.Message != nil && ev.Message.Content != "" {
+			out.WriteString(ev.Message.Content)
+		}
+		if ev.IsDone() || ev.Event == coze.ChatEventConversationMessageCompleted {
+			break
+		}
+	}
+	answer := NormalizeRewrittenQuery(out.String())
+	if answer == "" {
+		return strings.TrimSpace(text), nil
+	}
+	return answer, nil
 }
 
 func (h *CozeHandler) expandQueryCoze(ctx context.Context, text string, options *QueryOptions) (string, []string, error) {

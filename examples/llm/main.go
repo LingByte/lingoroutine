@@ -41,4 +41,10 @@ func main() {
 	}
 	enc, _ := json.MarshalIndent(res, "", "  ")
 	fmt.Println(string(enc))
+	//resp, err := provider.QueryWithOptions("那个啥，就是想问下上海去年白皮书", &llm.QueryOptions{
+	//	Model:                     "gpt-4o-mini",
+	//	EnableQueryRewrite:        true,
+	//	QueryRewriteInstruction:   "保留时间地点实体",
+	//	EnableQueryExpansion:      true,
+	//})
 }

@@ -1,0 +1,19 @@
+{
+  "name": "示例项目",
+  "version": "1.0.0",
+  "description": "这是一个示例JSON文件",
+  "author": {
+    "name": "开发者",
+    "email": "dev@example.com"
+  },
+  "features": [
+    "功能1",
+    "功能2",
+    "功能3"
+  ],
+  "config": {
+    "debug": true,
+    "timeout": 30,
+    "retries": 3
+  }
+}

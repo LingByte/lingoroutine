@@ -77,6 +77,16 @@ func (h *OllamaHandler) QueryWithOptions(text string, options *QueryOptions) (*Q
 		}
 	}()
 
+	var rewrite *QueryRewrite
+	if options.EnableQueryRewrite {
+		before := text
+		rw, err := h.rewriteQueryChatCompletions(reqCtx, before, options)
+		if err == nil && rw != "" {
+			rewrite = &QueryRewrite{Original: before, Rewritten: rw}
+			text = rw
+		}
+	}
+
 	var expansion *QueryExpansion
 	if options.EnableQueryExpansion {
 		expanded, terms, err := h.expandQueryChatCompletions(reqCtx, text, options)
@@ -132,6 +142,7 @@ func (h *OllamaHandler) QueryWithOptions(text string, options *QueryOptions) (*Q
 		Model:     model,
 		Choices:   []QueryChoice{{Index: 0, Content: content, FinishReason: reason}},
 		Expansion: expansion,
+		Rewrite:   rewrite,
 		Usage: &TokenUsage{
 			PromptTokens:     parsed.Usage.PromptTokens,
 			CompletionTokens: parsed.Usage.CompletionTokens,
@@ -158,9 +169,25 @@ func (h *OllamaHandler) QueryStream(text string, options *QueryOptions, callback
 		}
 	}()
 
+	var streamRewrite *QueryRewrite
+	if options.EnableQueryRewrite {
+		before := text
+		rw, err := h.rewriteQueryChatCompletions(reqCtx, before, options)
+		if err == nil && rw != "" {
+			streamRewrite = &QueryRewrite{Original: before, Rewritten: rw}
+			text = rw
+		}
+	}
+	var streamExpansion *QueryExpansion
 	if options.EnableQueryExpansion {
-		expanded, _, err := h.expandQueryChatCompletions(reqCtx, text, options)
+		expanded, terms, err := h.expandQueryChatCompletions(reqCtx, text, options)
 		if err == nil {
+			streamExpansion = &QueryExpansion{
+				Original: text,
+				Expanded: expanded,
+				Terms:    terms,
+				Debug:    map[string]any{},
+			}
 			text = expanded
 		}
 	}
@@ -237,9 +264,11 @@ func (h *OllamaHandler) QueryStream(text string, options *QueryOptions, callback
 	content := strings.TrimSpace(out.String())
 	h.mem.appendPairAndMaybeSummarize(reqCtx, model, text, content, h.summarizeConversation)
 	return &QueryResponse{
-		Provider: h.Provider(),
-		Model:    model,
-		Choices:  []QueryChoice{{Index: 0, Content: content, FinishReason: "stop"}},
+		Provider:  h.Provider(),
+		Model:     model,
+		Choices:   []QueryChoice{{Index: 0, Content: content, FinishReason: "stop"}},
+		Rewrite:   streamRewrite,
+		Expansion: streamExpansion,
 	}, nil
 }
 
@@ -315,6 +344,49 @@ func (h *OllamaHandler) summarizeConversation(ctx context.Context, model string,
 		return "", nil
 	}
 	return strings.TrimSpace(parsed.Choices[0].Message.Content), nil
+}
+
+func (h *OllamaHandler) rewriteQueryChatCompletions(ctx context.Context, text string, options *QueryOptions) (string, error) {
+	if options == nil {
+		options = &QueryOptions{}
+	}
+	model := queryRewriteModel(options, "llama3.1")
+	if model == "" {
+		model = "llama3.1"
+	}
+	prompt := BuildQueryRewriteUserPrompt(text, options.QueryRewriteInstruction)
+	body := map[string]any{
+		"model": model,
+		"messages": []map[string]string{
+			{"role": "user", "content": prompt},
+		},
+		"stream":      false,
+		"temperature": 0.2,
+		"max_tokens":  128,
+	}
+	raw, err := h.doChatCompletion(ctx, body)
+	if err != nil {
+		return "", err
+	}
+	var parsed struct {
+		Choices []struct {
+			Message struct {
+				Content string `json:"content"`
+			} `json:"message"`
+		} `json:"choices"`
+	}
+	if err := json.Unmarshal(raw, &parsed); err != nil {
+		return "", err
+	}
+	out := ""
+	if len(parsed.Choices) > 0 {
+		out = strings.TrimSpace(parsed.Choices[0].Message.Content)
+	}
+	out = NormalizeRewrittenQuery(out)
+	if out == "" {
+		return strings.TrimSpace(text), nil
+	}
+	return out, nil
 }
 
 func (h *OllamaHandler) expandQueryChatCompletions(ctx context.Context, text string, options *QueryOptions) (string, []string, error) {

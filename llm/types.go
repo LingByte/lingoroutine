@@ -71,6 +71,13 @@ type QueryOptions struct {
 	EnableQueryExpansion bool   // EnableQueryExpansion enables automatic query expansion using LLM
 	ExpansionMaxTerms    int    // ExpansionMaxTerms maximum number of expansion terms
 	ExpansionSeparator   string // ExpansionSeparator separator for expanded terms
+
+	// EnableQueryRewrite rewrites the user message with a stateless LLM call before expansion/main query.
+	EnableQueryRewrite bool
+	// QueryRewriteModel overrides the model for the rewrite call only (empty = use Model, then handler default).
+	QueryRewriteModel string
+	// QueryRewriteInstruction is appended to the rewrite prompt as extra constraints.
+	QueryRewriteInstruction string
 	// EnableSelfQueryJSONOutput requests strict JSON object replies (response_format json_object on OpenaiHandler).
 	// SelfQueryExtractor sets this by default; other handlers may ignore it and still return parseable text.
 	EnableSelfQueryJSONOutput bool
@@ -109,6 +116,14 @@ type QueryResponse struct {
 	Usage    *TokenUsage
 	// Expansion contains query expansion results if enabled
 	Expansion *QueryExpansion
+	// Rewrite contains query rewrite results if enabled
+	Rewrite *QueryRewrite
+}
+
+// QueryRewrite records the optional LLM rewrite step applied before expansion / main completion.
+type QueryRewrite struct {
+	Original  string
+	Rewritten string
 }
 
 // QueryExpansion contains the results of query expansion

@@ -90,13 +90,22 @@ func (h *AlibabaHandler) QueryWithOptions(text string, options *QueryOptions) (*
 	}
 	model := strings.TrimSpace(options.Model)
 
-	var expansion *QueryExpansion
+	var rewrite *QueryRewrite
 	promptUser := text
+	if options.EnableQueryRewrite {
+		rw, err := h.rewriteQueryAlibaba(h.ctx, promptUser, options)
+		if err == nil && rw != "" {
+			rewrite = &QueryRewrite{Original: promptUser, Rewritten: rw}
+			promptUser = rw
+		}
+	}
+
+	var expansion *QueryExpansion
 	if options.EnableQueryExpansion {
-		expanded, terms, err := h.expandQueryAlibaba(h.ctx, text, options)
+		expanded, terms, err := h.expandQueryAlibaba(h.ctx, promptUser, options)
 		if err == nil {
 			expansion = &QueryExpansion{
-				Original: text,
+				Original: promptUser,
 				Expanded: expanded,
 				Terms:    terms,
 				Debug:    map[string]any{},
@@ -146,6 +155,7 @@ func (h *AlibabaHandler) QueryWithOptions(text string, options *QueryOptions) (*
 		Model:     options.Model,
 		Choices:   []QueryChoice{{Index: 0, Content: answer, FinishReason: "stop"}},
 		Expansion: expansion,
+		Rewrite:   rewrite,
 	}, nil
 }
 
@@ -228,6 +238,52 @@ func (h *AlibabaHandler) composePrompt(currentUser string, opts *QueryOptions) s
 		return currentUser
 	}
 	return out
+}
+
+func (h *AlibabaHandler) rewriteQueryAlibaba(ctx context.Context, text string, options *QueryOptions) (string, error) {
+	if options == nil {
+		options = &QueryOptions{}
+	}
+	prompt := BuildQueryRewriteUserPrompt(text, options.QueryRewriteInstruction)
+	reqBody := map[string]any{
+		"input": map[string]string{
+			"prompt": prompt,
+		},
+		"parameters": map[string]any{},
+	}
+	b, err := json.Marshal(reqBody)
+	if err != nil {
+		return "", err
+	}
+	url := fmt.Sprintf("%s/api/v1/apps/%s/completion", strings.TrimRight(h.endpoint, "/"), h.appID)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(b))
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Authorization", "Bearer "+h.apiKey)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := h.client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return "", fmt.Errorf("alibaba rewrite failed: status=%d body=%s", resp.StatusCode, string(body))
+	}
+	var parsed struct {
+		Output struct {
+			Text string `json:"text"`
+		} `json:"output"`
+	}
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		return "", err
+	}
+	out := NormalizeRewrittenQuery(parsed.Output.Text)
+	if out == "" {
+		return strings.TrimSpace(text), nil
+	}
+	return out, nil
 }
 
 func (h *AlibabaHandler) expandQueryAlibaba(ctx context.Context, text string, options *QueryOptions) (string, []string, error) {

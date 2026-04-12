@@ -77,6 +77,16 @@ func (h *AnthropicHandler) QueryWithOptions(text string, options *QueryOptions) 
 		}
 	}()
 
+	var rewrite *QueryRewrite
+	if options.EnableQueryRewrite {
+		before := text
+		rw, err := h.rewriteQueryAnthropic(reqCtx, before, options)
+		if err == nil && rw != "" {
+			rewrite = &QueryRewrite{Original: before, Rewritten: rw}
+			text = rw
+		}
+	}
+
 	var expansion *QueryExpansion
 	if options.EnableQueryExpansion {
 		expanded, terms, err := h.expandQueryAnthropic(reqCtx, text, options)
@@ -136,6 +146,7 @@ func (h *AnthropicHandler) QueryWithOptions(text string, options *QueryOptions) 
 		Model:     model,
 		Choices:   []QueryChoice{{Index: 0, Content: answer, FinishReason: reason}},
 		Expansion: expansion,
+		Rewrite:   rewrite,
 		Usage: &TokenUsage{
 			PromptTokens:     parsed.Usage.InputTokens,
 			CompletionTokens: parsed.Usage.OutputTokens,
@@ -162,9 +173,25 @@ func (h *AnthropicHandler) QueryStream(text string, options *QueryOptions, callb
 		}
 	}()
 
+	var streamRewrite *QueryRewrite
+	if options.EnableQueryRewrite {
+		before := text
+		rw, err := h.rewriteQueryAnthropic(reqCtx, before, options)
+		if err == nil && rw != "" {
+			streamRewrite = &QueryRewrite{Original: before, Rewritten: rw}
+			text = rw
+		}
+	}
+	var streamExpansion *QueryExpansion
 	if options.EnableQueryExpansion {
-		expanded, _, err := h.expandQueryAnthropic(reqCtx, text, options)
+		expanded, terms, err := h.expandQueryAnthropic(reqCtx, text, options)
 		if err == nil {
+			streamExpansion = &QueryExpansion{
+				Original: text,
+				Expanded: expanded,
+				Terms:    terms,
+				Debug:    map[string]any{},
+			}
 			text = expanded
 		}
 	}
@@ -239,9 +266,11 @@ func (h *AnthropicHandler) QueryStream(text string, options *QueryOptions, callb
 	answer := strings.TrimSpace(out.String())
 	h.mem.appendPairAndMaybeSummarize(reqCtx, model, text, answer, h.summarizeConversationAnthropic)
 	return &QueryResponse{
-		Provider: h.Provider(),
-		Model:    model,
-		Choices:  []QueryChoice{{Index: 0, Content: answer, FinishReason: "stop"}},
+		Provider:  h.Provider(),
+		Model:     model,
+		Choices:   []QueryChoice{{Index: 0, Content: answer, FinishReason: "stop"}},
+		Rewrite:   streamRewrite,
+		Expansion: streamExpansion,
 	}, nil
 }
 
@@ -348,6 +377,54 @@ func (h *AnthropicHandler) summarizeConversationAnthropic(ctx context.Context, m
 		}
 	}
 	return strings.TrimSpace(b.String()), nil
+}
+
+func (h *AnthropicHandler) rewriteQueryAnthropic(ctx context.Context, text string, options *QueryOptions) (string, error) {
+	if options == nil {
+		options = &QueryOptions{}
+	}
+	model := queryRewriteModel(options, "claude-3-5-sonnet-20241022")
+	if model == "" {
+		model = "claude-3-5-sonnet-20241022"
+	}
+	prompt := BuildQueryRewriteUserPrompt(text, options.QueryRewriteInstruction)
+	body := map[string]any{
+		"model":       model,
+		"max_tokens":  128,
+		"temperature": 0.2,
+		"messages": []map[string]any{
+			{
+				"role": "user",
+				"content": []map[string]string{
+					{"type": "text", "text": prompt},
+				},
+			},
+		},
+	}
+	raw, err := h.doAnthropic(ctx, body)
+	if err != nil {
+		return "", err
+	}
+	var parsed struct {
+		Content []struct {
+			Type string `json:"type"`
+			Text string `json:"text"`
+		} `json:"content"`
+	}
+	if err := json.Unmarshal(raw, &parsed); err != nil {
+		return "", err
+	}
+	var b strings.Builder
+	for _, c := range parsed.Content {
+		if c.Type == "text" {
+			b.WriteString(c.Text)
+		}
+	}
+	out := NormalizeRewrittenQuery(b.String())
+	if out == "" {
+		return strings.TrimSpace(text), nil
+	}
+	return out, nil
 }
 
 func (h *AnthropicHandler) expandQueryAnthropic(ctx context.Context, text string, options *QueryOptions) (string, []string, error) {

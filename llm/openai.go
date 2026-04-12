@@ -301,6 +301,18 @@ func (oh *OpenaiHandler) QueryWithOptions(text string, options *QueryOptions) (*
 		options = &QueryOptions{}
 	}
 
+	var rewrite *QueryRewrite
+	if options.EnableQueryRewrite {
+		before := text
+		rwOut, err := oh.rewriteQueryStateless(before, options)
+		if err != nil && oh.logger != nil {
+			oh.logger.Warn("Query rewrite failed", zap.Error(err))
+		} else if err == nil && rwOut != "" {
+			rewrite = &QueryRewrite{Original: before, Rewritten: rwOut}
+			text = rwOut
+		}
+	}
+
 	var expansion *QueryExpansion
 	if options.EnableQueryExpansion {
 		expandedText, terms, err := oh.expandQueryStateless(text, options)
@@ -549,6 +561,7 @@ func (oh *OpenaiHandler) QueryWithOptions(text string, options *QueryOptions) (*
 			}(),
 		},
 		Expansion: expansion,
+		Rewrite:   rewrite,
 	}
 
 	llmDetails := &LLMDetails{
@@ -595,11 +608,29 @@ func (oh *OpenaiHandler) QueryStream(text string, options *QueryOptions, callbac
 	if options == nil {
 		options = &QueryOptions{}
 	}
+	var streamRewrite *QueryRewrite
+	if options.EnableQueryRewrite {
+		before := text
+		rwOut, err := oh.rewriteQueryStateless(before, options)
+		if err != nil && oh.logger != nil {
+			oh.logger.Warn("Query rewrite failed", zap.Error(err))
+		} else if err == nil && rwOut != "" {
+			streamRewrite = &QueryRewrite{Original: before, Rewritten: rwOut}
+			text = rwOut
+		}
+	}
+	var streamExpansion *QueryExpansion
 	if options.EnableQueryExpansion {
-		expandedText, _, err := oh.expandQueryStateless(text, options)
+		expandedText, terms, err := oh.expandQueryStateless(text, options)
 		if err != nil && oh.logger != nil {
 			oh.logger.Warn("Query expansion failed", zap.Error(err))
 		} else if err == nil {
+			streamExpansion = &QueryExpansion{
+				Original: text,
+				Expanded: expandedText,
+				Terms:    terms,
+				Debug:    map[string]any{},
+			}
 			text = expandedText
 		}
 	}
@@ -747,11 +778,13 @@ func (oh *OpenaiHandler) QueryStream(text string, options *QueryOptions, callbac
 	}
 
 	return &QueryResponse{
-		Provider: oh.Provider(),
-		Model:    model,
+		Provider:  oh.Provider(),
+		Model:     model,
 		Choices: []QueryChoice{
 			{Index: 0, Content: finalText, FinishReason: "stop"},
 		},
+		Rewrite:   streamRewrite,
+		Expansion: streamExpansion,
 	}, nil
 }
 
@@ -787,4 +820,34 @@ func (oh *OpenaiHandler) expandQueryStateless(text string, options *QueryOptions
 	out := strings.TrimSpace(resp.Choices[0].Message.Content)
 	expanded, terms := ExpandedQueryFromModelAnswer(text, out, maxTerms, separator)
 	return expanded, terms, nil
+}
+
+func (oh *OpenaiHandler) rewriteQueryStateless(text string, options *QueryOptions) (string, error) {
+	if options == nil {
+		options = &QueryOptions{}
+	}
+	prompt := BuildQueryRewriteUserPrompt(text, options.QueryRewriteInstruction)
+	model := queryRewriteModel(options, "gpt-4o-mini")
+	req := openai.ChatCompletionRequest{
+		Model: model,
+		User:  GenerateLingRequestID(),
+		Messages: []openai.ChatCompletionMessage{
+			{Role: openai.ChatMessageRoleUser, Content: prompt},
+		},
+		MaxTokens:   128,
+		Temperature: 0.2,
+		TopP:        1,
+	}
+	resp, err := oh.client.CreateChatCompletion(oh.ctx, req)
+	if err != nil {
+		return "", err
+	}
+	if len(resp.Choices) == 0 {
+		return strings.TrimSpace(text), nil
+	}
+	out := NormalizeRewrittenQuery(resp.Choices[0].Message.Content)
+	if out == "" {
+		return strings.TrimSpace(text), nil
+	}
+	return out, nil
 }
