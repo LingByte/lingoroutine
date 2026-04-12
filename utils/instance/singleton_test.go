@@ -1,4 +1,4 @@
-package utils
+package instance
 
 // Copyright (c) 2026 LingByte
 // SPDX-License-Identifier: MIT

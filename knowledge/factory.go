@@ -16,7 +16,20 @@ type QdrantOptions struct {
 	Embedder   Embedder
 }
 
-type AliyunOptions struct{}
+// AliyunOptions configures Alibaba Cloud Model Studio (百炼) knowledge access.
+// Use AccessKey pair with Bailian data permissions (e.g. AliyunBailianDataFullAccess for RAM users).
+type AliyunOptions struct {
+	AccessKeyID     string
+	AccessKeySecret string
+	// Endpoint defaults to DefaultBailianEndpoint (Beijing public endpoint).
+	Endpoint string
+	// RegionID defaults to cn-beijing when Endpoint is empty.
+	RegionID string
+	// WorkspaceID is the business space id from the Bailian console.
+	WorkspaceID string
+	// IndexID is the knowledge base id (CreateIndex / console).
+	IndexID string
+}
 
 type FactoryOptions struct {
 	Qdrant *QdrantOptions
@@ -37,7 +50,10 @@ func New(provider string, opts *FactoryOptions) (KnowledgeHandler, error) {
 		q := opts.Qdrant
 		return &QdrantHandler{BaseURL: q.BaseURL, APIKey: q.APIKey, Collection: q.Collection, HTTPClient: q.HTTPClient, Embedder: q.Embedder}, nil
 	case KnowledgeAliyun:
-		return nil, ErrUnsupportedKnowledgeProvider
+		if opts == nil || opts.Aliyun == nil {
+			return nil, errors.New("aliyun options are required")
+		}
+		return newAliyunHandler(opts.Aliyun)
 	default:
 		return nil, ErrUnsupportedKnowledgeProvider
 	}

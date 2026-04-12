@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/LingByte/lingoroutine/utils"
+	"github.com/LingByte/lingoroutine/utils/instance"
 )
 
 // DatabaseConfig 数据库配置单例
@@ -16,7 +16,7 @@ type DatabaseConfig struct {
 	Database string
 }
 
-var dbConfigSingleton = utils.NewSingleton(func() *DatabaseConfig {
+var dbConfigSingleton = instance.NewSingleton(func() *DatabaseConfig {
 	fmt.Println("初始化数据库配置...")
 	return &DatabaseConfig{
 		Host:     "localhost",
@@ -35,7 +35,7 @@ type CacheConfig struct {
 	DB       int
 }
 
-var cacheConfigSingleton = utils.NewSingleton(func() *CacheConfig {
+var cacheConfigSingleton = instance.NewSingleton(func() *CacheConfig {
 	fmt.Println("初始化缓存配置...")
 	return &CacheConfig{
 		Host:     "localhost",

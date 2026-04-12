@@ -76,8 +76,6 @@ func main() {
 		fmt.Println()
 	}
 
-	// 演示从字节数组解析
-	fmt.Println("=== 从字节数组解析演示 ===\n")
 	jsonContent := `{"name": "测试", "age": 25, "city": "北京"}`
 	result, err := parser.ParseBytes(ctx, "test.json", []byte(jsonContent), opts)
 	if err != nil {

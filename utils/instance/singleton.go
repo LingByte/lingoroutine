@@ -1,9 +1,10 @@
-package utils
+package instance
 
 // Copyright (c) 2026 LingByte
 // SPDX-License-Identifier: MIT
 
 import (
+	"reflect"
 	"sync"
 )
 
@@ -43,5 +44,5 @@ func (s *Singleton[T]) Reset() {
 // IsInitialized 检查是否已初始化
 func (s *Singleton[T]) IsInitialized() bool {
 	var zero T
-	return s.instance != zero
+	return !reflect.DeepEqual(s.instance, zero)
 }
