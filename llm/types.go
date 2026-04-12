@@ -71,6 +71,9 @@ type QueryOptions struct {
 	EnableQueryExpansion bool   // EnableQueryExpansion enables automatic query expansion using LLM
 	ExpansionMaxTerms    int    // ExpansionMaxTerms maximum number of expansion terms
 	ExpansionSeparator   string // ExpansionSeparator separator for expanded terms
+	// EnableSelfQueryJSONOutput requests strict JSON object replies (response_format json_object on OpenaiHandler).
+	// SelfQueryExtractor sets this by default; other handlers may ignore it and still return parseable text.
+	EnableSelfQueryJSONOutput bool
 }
 
 type TokenUsage struct {

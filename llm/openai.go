@@ -332,7 +332,7 @@ func (oh *OpenaiHandler) QueryWithOptions(text string, options *QueryOptions) (*
 
 	requestID := GenerateLingRequestID()
 	requestedOutputFormat := options.OutputFormat
-	if requestedOutputFormat == "" && options.EnableJSONOutput {
+	if requestedOutputFormat == "" && (options.EnableJSONOutput || options.EnableSelfQueryJSONOutput) {
 		requestedOutputFormat = OutputFormatJSONObject
 	}
 	requestedOutputFormatLower := strings.ToLower(requestedOutputFormat)

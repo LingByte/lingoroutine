@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/LingByte/lingoroutine/llm"
 	"github.com/LingByte/lingoroutine/utils"
@@ -23,9 +25,20 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-	query, err := provider.Query("你好", utils.GetEnv("LLM_MODEL"))
+
+	model := utils.GetEnv("LLM_MODEL")
+	question := strings.TrimSpace(utils.GetEnv("LLM_QUESTION"))
+	if question == "" {
+		question = "去年上海发布的白皮书有哪些"
+	}
+	allowed := []string{"source", "doc_type", "namespace", "location", "years", "dates", "tags_any"}
+	ex := llm.NewSelfQueryExtractor(provider, allowed)
+	opt := &llm.SelfQueryOptions{Model: model}
+	opt.UsePlainQuery = true
+	res, err := ex.Extract(ctx, question, opt)
 	if err != nil {
 		panic(err)
 	}
-	fmt.Println(query)
+	enc, _ := json.MarshalIndent(res, "", "  ")
+	fmt.Println(string(enc))
 }
