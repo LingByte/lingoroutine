@@ -10,9 +10,15 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"go.uber.org/zap"
+)
+
+var (
+	defaultIPService *IPLocationService
+	ipServiceOnce    sync.Once
 )
 
 // IPLocationService IP地理位置服务
@@ -237,13 +243,8 @@ func GetRealAddressByIP(ip string) string {
 		return INTERNAL_IP
 	}
 
-	// 创建临时服务实例（使用默认配置和空logger）
-	service := &IPLocationService{
-		apiURL:      IP_API_URL,
-		timeout:     5 * time.Second,
-		logger:      nil, // 在测试中可能为nil
-		usePconline: false,
-	}
+	// 使用默认服务实例
+	service := getDefaultIPService()
 	_, _, location, _ := service.GetLocation(ip)
 
 	if location == UNKNOWN || location == "" {
@@ -251,4 +252,52 @@ func GetRealAddressByIP(ip string) string {
 	}
 
 	return location
+}
+
+// GetLocationByIP 根据IP获取地理位置信息（国家、城市、完整位置）
+func GetLocationByIP(ip string) (country, city, location string) {
+	if IsInternalIP(ip) {
+		return "Local", "Local", LOCAL_NETWORK
+	}
+
+	service := getDefaultIPService()
+	country, city, location, _ = service.GetLocation(ip)
+	return country, city, location
+}
+
+// GetLocationByIPWithPconline 使用pconline API获取IP地理位置（国内IP更准确）
+func GetLocationByIPWithPconline(ip string) (country, city, location string) {
+	if IsInternalIP(ip) {
+		return "Local", "Local", LOCAL_NETWORK
+	}
+
+	service := getDefaultIPService()
+	service.usePconline = true
+	country, city, location, _ = service.GetLocation(ip)
+	return country, city, location
+}
+
+// SetIPServiceLogger 设置IP服务的logger
+func SetIPServiceLogger(logger *zap.Logger) {
+	service := getDefaultIPService()
+	service.logger = logger
+}
+
+// SetIPServiceTimeout 设置IP服务的超时时间
+func SetIPServiceTimeout(timeout time.Duration) {
+	service := getDefaultIPService()
+	service.timeout = timeout
+}
+
+// getDefaultIPService 获取默认的IP服务实例（单例模式）
+func getDefaultIPService() *IPLocationService {
+	ipServiceOnce.Do(func() {
+		defaultIPService = &IPLocationService{
+			apiURL:      IP_API_URL,
+			timeout:     5 * time.Second,
+			logger:      nil,
+			usePconline: false,
+		}
+	})
+	return defaultIPService
 }
