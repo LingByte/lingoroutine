@@ -300,6 +300,25 @@ func (oh *OpenaiHandler) QueryWithOptions(text string, options *QueryOptions) (*
 	if options == nil {
 		options = &QueryOptions{}
 	}
+	requestType := strings.TrimSpace(options.RequestType)
+	if requestType == "" {
+		requestType = "query"
+	}
+	model := options.Model
+	if model == "" {
+		model = "gpt-3.5-turbo"
+	}
+
+	tracker := NewLLMRequestTracker(
+		options.SessionID,
+		options.UserID,
+		"openai",
+		model,
+		oh.baseUrl,
+		requestType,
+	)
+
+	// 构建消息 - 目前使用单条文本，后续可扩展支持消息历史
 
 	var rewrite *QueryRewrite
 	if options.EnableQueryRewrite {
@@ -333,14 +352,19 @@ func (oh *OpenaiHandler) QueryWithOptions(text string, options *QueryOptions) (*
 	if n <= 0 {
 		n = 1
 	}
-	model := options.Model
-	if model == "" {
-		model = "qwen-plus"
-	}
 	estimatedMaxOutputChars := 0
 	if options.MaxTokens > 0 {
 		estimatedMaxOutputChars = options.MaxTokens * 4
 	}
+
+	tracker = NewLLMRequestTracker(
+		options.SessionID,
+		options.UserID,
+		oh.Provider(),
+		model,
+		oh.baseUrl,
+		requestType,
+	)
 
 	requestID := GenerateLingRequestID()
 	requestedOutputFormat := options.OutputFormat
@@ -392,6 +416,8 @@ func (oh *OpenaiHandler) QueryWithOptions(text string, options *QueryOptions) (*
 		return raw
 	}
 
+	externalShortTermMessages := buildShortTermMessages(text, options)
+	hasExternalMessages := len(options.Messages) > 0
 	sanitizedMessages := make([]openai.ChatCompletionMessage, 0)
 	sysContent := appendEmotionalStyle(oh.systemPrompt, options)
 	if strings.TrimSpace(sysContent) != "" {
@@ -425,20 +451,29 @@ func (oh *OpenaiHandler) QueryWithOptions(text string, options *QueryOptions) (*
 	}
 	oh.mutex.Unlock()
 
-	if summarySnapshot != "" {
-		sanitizedMessages = append(sanitizedMessages, openai.ChatCompletionMessage{
-			Role:    openai.ChatMessageRoleSystem,
-			Content: "Conversation summary so far: " + summarySnapshot,
-		})
-	}
-	if len(historySnapshot) > 0 {
-		if maxMemoryMessages <= 0 {
-			maxMemoryMessages = defaultMaxMemoryMessages
+	if hasExternalMessages {
+		for _, m := range externalShortTermMessages {
+			sanitizedMessages = append(sanitizedMessages, openai.ChatCompletionMessage{
+				Role:    m.Role,
+				Content: m.Content,
+			})
 		}
-		if len(historySnapshot) > maxMemoryMessages {
-			historySnapshot = historySnapshot[len(historySnapshot)-maxMemoryMessages:]
+	} else {
+		if summarySnapshot != "" {
+			sanitizedMessages = append(sanitizedMessages, openai.ChatCompletionMessage{
+				Role:    openai.ChatMessageRoleSystem,
+				Content: "Conversation summary so far: " + summarySnapshot,
+			})
 		}
-		sanitizedMessages = append(sanitizedMessages, historySnapshot...)
+		if len(historySnapshot) > 0 {
+			if maxMemoryMessages <= 0 {
+				maxMemoryMessages = defaultMaxMemoryMessages
+			}
+			if len(historySnapshot) > maxMemoryMessages {
+				historySnapshot = historySnapshot[len(historySnapshot)-maxMemoryMessages:]
+			}
+			sanitizedMessages = append(sanitizedMessages, historySnapshot...)
+		}
 	}
 	if formatInstruction != "" {
 		sanitizedMessages = append(sanitizedMessages, openai.ChatCompletionMessage{
@@ -453,10 +488,12 @@ func (oh *OpenaiHandler) QueryWithOptions(text string, options *QueryOptions) (*
 		})
 	}
 
-	sanitizedMessages = append(sanitizedMessages, openai.ChatCompletionMessage{
-		Role:    openai.ChatMessageRoleUser,
-		Content: text,
-	})
+	if !hasExternalMessages {
+		sanitizedMessages = append(sanitizedMessages, openai.ChatCompletionMessage{
+			Role:    openai.ChatMessageRoleUser,
+			Content: text,
+		})
+	}
 	request := openai.ChatCompletionRequest{
 		Model:          model,
 		N:              n,
@@ -484,6 +521,7 @@ func (oh *OpenaiHandler) QueryWithOptions(text string, options *QueryOptions) (*
 	}()
 	response, err := oh.client.CreateChatCompletion(reqCtx, request)
 	if err != nil {
+		tracker.Error("API_ERROR", err.Error())
 		return nil, err
 	}
 	choices := make([]QueryChoice, 0, len(response.Choices))
@@ -505,30 +543,32 @@ func (oh *OpenaiHandler) QueryWithOptions(text string, options *QueryOptions) (*
 	if len(choices) > 0 {
 		assistantContent = choices[0].Content
 	}
-	oh.mutex.Lock()
-	oh.messages = append(oh.messages,
-		openai.ChatCompletionMessage{Role: openai.ChatMessageRoleUser, Content: text},
-		openai.ChatCompletionMessage{Role: openai.ChatMessageRoleAssistant, Content: assistantContent},
-	)
-	if maxMemoryMessages <= 0 {
-		maxMemoryMessages = defaultMaxMemoryMessages
-	}
-	if len(oh.messages) > maxMemoryMessages {
-		oh.messages = oh.messages[len(oh.messages)-maxMemoryMessages:]
-	}
+	if !hasExternalMessages {
+		oh.mutex.Lock()
+		oh.messages = append(oh.messages,
+			openai.ChatCompletionMessage{Role: openai.ChatMessageRoleUser, Content: text},
+			openai.ChatCompletionMessage{Role: openai.ChatMessageRoleAssistant, Content: assistantContent},
+		)
+		if maxMemoryMessages <= 0 {
+			maxMemoryMessages = defaultMaxMemoryMessages
+		}
+		if len(oh.messages) > maxMemoryMessages {
+			oh.messages = oh.messages[len(oh.messages)-maxMemoryMessages:]
+		}
 
-	localSummary := oh.summary
-	shouldStartSummarize := len(oh.messages) >= maxMemoryMessages
-	var summarizeSnapshot []openai.ChatCompletionMessage
-	if shouldStartSummarize && !oh.summarizing.Load() {
-		oh.summarizing.Store(true)
-		seq := atomic.AddUint64(&oh.summarizeSeq, 1)
-		summarizeSnapshot = make([]openai.ChatCompletionMessage, len(oh.messages))
-		copy(summarizeSnapshot, oh.messages)
-		oh.mutex.Unlock()
-		oh.startAsyncSummarizeIfNeeded(model, summarizeSnapshot, localSummary, seq)
-	} else {
-		oh.mutex.Unlock()
+		localSummary := oh.summary
+		shouldStartSummarize := len(oh.messages) >= maxMemoryMessages
+		var summarizeSnapshot []openai.ChatCompletionMessage
+		if shouldStartSummarize && !oh.summarizing.Load() {
+			oh.summarizing.Store(true)
+			seq := atomic.AddUint64(&oh.summarizeSeq, 1)
+			summarizeSnapshot = make([]openai.ChatCompletionMessage, len(oh.messages))
+			copy(summarizeSnapshot, oh.messages)
+			oh.mutex.Unlock()
+			oh.startAsyncSummarizeIfNeeded(model, summarizeSnapshot, localSummary, seq)
+		} else {
+			oh.mutex.Unlock()
+		}
 	}
 
 	resp := &QueryResponse{
@@ -601,12 +641,18 @@ func (oh *OpenaiHandler) QueryWithOptions(text string, options *QueryOptions) (*
 	if b, e := json.Marshal(response); e == nil {
 		llmDetails.RawResponseJSON = string(b)
 	}
+
+	tracker.Complete(resp)
 	return resp, nil
 }
 
 func (oh *OpenaiHandler) QueryStream(text string, options *QueryOptions, callback func(segment string, isComplete bool) error) (*QueryResponse, error) {
 	if options == nil {
 		options = &QueryOptions{}
+	}
+	requestType := strings.TrimSpace(options.RequestType)
+	if requestType == "" {
+		requestType = "query_stream"
 	}
 	var streamRewrite *QueryRewrite
 	if options.EnableQueryRewrite {
@@ -643,7 +689,18 @@ func (oh *OpenaiHandler) QueryStream(text string, options *QueryOptions, callbac
 		model = "qwen-plus"
 	}
 
+	tracker := NewLLMRequestTracker(
+		options.SessionID,
+		options.UserID,
+		oh.Provider(),
+		model,
+		oh.baseUrl,
+		requestType,
+	)
+
 	requestID := GenerateLingRequestID()
+	externalShortTermMessages := buildShortTermMessages(text, options)
+	hasExternalMessages := len(options.Messages) > 0
 	messages := make([]openai.ChatCompletionMessage, 0)
 	sysContent := appendEmotionalStyle(oh.systemPrompt, options)
 	if strings.TrimSpace(sysContent) != "" {
@@ -668,22 +725,30 @@ func (oh *OpenaiHandler) QueryStream(text string, options *QueryOptions, callbac
 	historySnapshot := make([]openai.ChatCompletionMessage, len(oh.messages))
 	copy(historySnapshot, oh.messages)
 	oh.mutex.Unlock()
-	if summarySnapshot != "" {
-		messages = append(messages, openai.ChatCompletionMessage{
-			Role:    openai.ChatMessageRoleSystem,
-			Content: "Conversation summary so far: " + summarySnapshot,
-		})
-	}
-	if len(historySnapshot) > 0 {
-		if maxMemoryMessages <= 0 {
-			maxMemoryMessages = defaultMaxMemoryMessages
+	if hasExternalMessages {
+		for _, m := range externalShortTermMessages {
+			messages = append(messages, openai.ChatCompletionMessage{Role: m.Role, Content: m.Content})
 		}
-		if len(historySnapshot) > maxMemoryMessages {
-			historySnapshot = historySnapshot[len(historySnapshot)-maxMemoryMessages:]
+	} else {
+		if summarySnapshot != "" {
+			messages = append(messages, openai.ChatCompletionMessage{
+				Role:    openai.ChatMessageRoleSystem,
+				Content: "Conversation summary so far: " + summarySnapshot,
+			})
 		}
-		messages = append(messages, historySnapshot...)
+		if len(historySnapshot) > 0 {
+			if maxMemoryMessages <= 0 {
+				maxMemoryMessages = defaultMaxMemoryMessages
+			}
+			if len(historySnapshot) > maxMemoryMessages {
+				historySnapshot = historySnapshot[len(historySnapshot)-maxMemoryMessages:]
+			}
+			messages = append(messages, historySnapshot...)
+		}
 	}
-	messages = append(messages, openai.ChatCompletionMessage{Role: openai.ChatMessageRoleUser, Content: text})
+	if !hasExternalMessages {
+		messages = append(messages, openai.ChatCompletionMessage{Role: openai.ChatMessageRoleUser, Content: text})
+	}
 
 	request := openai.ChatCompletionRequest{
 		Model:    model,
@@ -713,6 +778,7 @@ func (oh *OpenaiHandler) QueryStream(text string, options *QueryOptions, callbac
 	}()
 	stream, err := oh.client.CreateChatCompletionStream(reqCtx, request)
 	if err != nil {
+		tracker.Error("API_ERROR", err.Error())
 		return nil, err
 	}
 	defer stream.Close()
@@ -727,6 +793,7 @@ func (oh *OpenaiHandler) QueryStream(text string, options *QueryOptions, callbac
 			if errors.Is(e, io.EOF) {
 				break
 			}
+			tracker.Error("STREAM_ERROR", e.Error())
 			return nil, e
 		}
 		if len(chunkResp.Choices) == 0 {
@@ -753,39 +820,43 @@ func (oh *OpenaiHandler) QueryStream(text string, options *QueryOptions, callbac
 	}
 
 	finalText := strings.TrimSpace(content.String())
-	oh.mutex.Lock()
-	oh.messages = append(oh.messages,
-		openai.ChatCompletionMessage{Role: openai.ChatMessageRoleUser, Content: text},
-		openai.ChatCompletionMessage{Role: openai.ChatMessageRoleAssistant, Content: finalText},
-	)
-	if maxMemoryMessages <= 0 {
-		maxMemoryMessages = defaultMaxMemoryMessages
-	}
-	if len(oh.messages) > maxMemoryMessages {
-		oh.messages = oh.messages[len(oh.messages)-maxMemoryMessages:]
-	}
-	localSummary := oh.summary
-	shouldStartSummarize := len(oh.messages) >= maxMemoryMessages
-	if shouldStartSummarize && !oh.summarizing.Load() {
-		oh.summarizing.Store(true)
-		seq := atomic.AddUint64(&oh.summarizeSeq, 1)
-		snapshot := make([]openai.ChatCompletionMessage, len(oh.messages))
-		copy(snapshot, oh.messages)
-		oh.mutex.Unlock()
-		oh.startAsyncSummarizeIfNeeded(model, snapshot, localSummary, seq)
-	} else {
-		oh.mutex.Unlock()
+	if !hasExternalMessages {
+		oh.mutex.Lock()
+		oh.messages = append(oh.messages,
+			openai.ChatCompletionMessage{Role: openai.ChatMessageRoleUser, Content: text},
+			openai.ChatCompletionMessage{Role: openai.ChatMessageRoleAssistant, Content: finalText},
+		)
+		if maxMemoryMessages <= 0 {
+			maxMemoryMessages = defaultMaxMemoryMessages
+		}
+		if len(oh.messages) > maxMemoryMessages {
+			oh.messages = oh.messages[len(oh.messages)-maxMemoryMessages:]
+		}
+		localSummary := oh.summary
+		shouldStartSummarize := len(oh.messages) >= maxMemoryMessages
+		if shouldStartSummarize && !oh.summarizing.Load() {
+			oh.summarizing.Store(true)
+			seq := atomic.AddUint64(&oh.summarizeSeq, 1)
+			snapshot := make([]openai.ChatCompletionMessage, len(oh.messages))
+			copy(snapshot, oh.messages)
+			oh.mutex.Unlock()
+			oh.startAsyncSummarizeIfNeeded(model, snapshot, localSummary, seq)
+		} else {
+			oh.mutex.Unlock()
+		}
 	}
 
-	return &QueryResponse{
-		Provider:  oh.Provider(),
-		Model:     model,
+	resp := &QueryResponse{
+		Provider: oh.Provider(),
+		Model:    model,
 		Choices: []QueryChoice{
 			{Index: 0, Content: finalText, FinishReason: "stop"},
 		},
 		Rewrite:   streamRewrite,
 		Expansion: streamExpansion,
-	}, nil
+	}
+	tracker.Complete(resp)
+	return resp, nil
 }
 
 // expandQueryStateless runs expansion via a one-shot completion without touching conversation memory or oh.mutex.

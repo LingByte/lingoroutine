@@ -12,8 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
-
-	)
+)
 
 type AlibabaHandler struct {
 	ctx          context.Context
@@ -50,7 +49,7 @@ func NewAlibabaHandler(ctx context.Context, llmOptions *LLMOptions) (*AlibabaHan
 	if appID == "" {
 		return nil, errors.New("alibaba app id is required (set LLM BaseURL as app id or ALIBABA_APP_ID)")
 	}
-		return &AlibabaHandler{
+	return &AlibabaHandler{
 		ctx:          ctx,
 		apiKey:       strings.TrimSpace(opts.ApiKey),
 		appID:        appID,
@@ -68,7 +67,6 @@ func (h *AlibabaHandler) Interrupt() {
 	}
 }
 
-
 func (h *AlibabaHandler) Query(text, model string) (string, error) {
 	resp, err := h.QueryWithOptions(text, &QueryOptions{Model: model})
 	if err != nil {
@@ -84,6 +82,23 @@ func (h *AlibabaHandler) QueryWithOptions(text string, options *QueryOptions) (*
 	if options == nil {
 		options = &QueryOptions{}
 	}
+	requestType := strings.TrimSpace(options.RequestType)
+	if requestType == "" {
+		requestType = "query"
+	}
+	model := options.Model
+	if model == "" {
+		model = "qwen-plus"
+	}
+
+	tracker := NewLLMRequestTracker(
+		options.SessionID,
+		options.UserID,
+		"alibaba",
+		model,
+		h.endpoint,
+		requestType,
+	)
 	select {
 	case <-h.interruptCh:
 		return nil, errors.New("interrupted")
@@ -113,30 +128,38 @@ func (h *AlibabaHandler) QueryWithOptions(text string, options *QueryOptions) (*
 		}
 	}
 
+	shortTermPrompt := chatMessagesToPrompt(buildShortTermMessages(promptUser, options))
+	if strings.TrimSpace(shortTermPrompt) == "" {
+		shortTermPrompt = promptUser
+	}
 	reqBody := map[string]any{
 		"input": map[string]string{
-			"prompt": promptUser,
+			"prompt": shortTermPrompt,
 		},
 		"parameters": map[string]any{},
 	}
 	b, err := json.Marshal(reqBody)
 	if err != nil {
+		tracker.Error("REQUEST_ERROR", err.Error())
 		return nil, err
 	}
 	url := fmt.Sprintf("%s/api/v1/apps/%s/completion", strings.TrimRight(h.endpoint, "/"), h.appID)
 	req, err := http.NewRequestWithContext(h.ctx, http.MethodPost, url, bytes.NewReader(b))
 	if err != nil {
+		tracker.Error("REQUEST_ERROR", err.Error())
 		return nil, err
 	}
 	req.Header.Set("Authorization", "Bearer "+h.apiKey)
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := h.client.Do(req)
 	if err != nil {
+		tracker.Error("REQUEST_ERROR", err.Error())
 		return nil, err
 	}
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		tracker.Error("HTTP_ERROR", fmt.Sprintf("status=%d body=%s", resp.StatusCode, string(body)))
 		return nil, fmt.Errorf("alibaba request failed: status=%d body=%s", resp.StatusCode, string(body))
 	}
 	var parsed struct {
@@ -145,16 +168,19 @@ func (h *AlibabaHandler) QueryWithOptions(text string, options *QueryOptions) (*
 		} `json:"output"`
 	}
 	if err := json.Unmarshal(body, &parsed); err != nil {
+		tracker.Error("JSON_PARSE_ERROR", err.Error())
 		return nil, err
 	}
 	answer := strings.TrimSpace(parsed.Output.Text)
-	return &QueryResponse{
+	queryResp := &QueryResponse{
 		Provider:  h.Provider(),
 		Model:     options.Model,
 		Choices:   []QueryChoice{{Index: 0, Content: answer, FinishReason: "stop"}},
 		Expansion: expansion,
 		Rewrite:   rewrite,
-	}, nil
+	}
+	tracker.Complete(queryResp)
+	return queryResp, nil
 }
 
 func (h *AlibabaHandler) QueryStream(text string, options *QueryOptions, callback func(segment string, isComplete bool) error) (*QueryResponse, error) {
@@ -174,7 +200,6 @@ func (h *AlibabaHandler) QueryStream(text string, options *QueryOptions, callbac
 }
 
 func (h *AlibabaHandler) Provider() string { return LLM_ALIBABA }
-
 
 func (h *AlibabaHandler) rewriteQueryAlibaba(ctx context.Context, text string, options *QueryOptions) (string, error) {
 	if options == nil {
@@ -267,4 +292,3 @@ func (h *AlibabaHandler) expandQueryAlibaba(ctx context.Context, text string, op
 	expanded, terms := ExpandedQueryFromModelAnswer(text, out, maxTerms, sep)
 	return expanded, terms, nil
 }
-

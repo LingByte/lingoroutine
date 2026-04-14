@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LingByte Demo</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+<body class="bg-gradient-to-br from-blue-50 to-indigo-100 min-h-screen">
+    <div class="container mx-auto px-4 py-16">
+        <div class="text-center mb-12">
+            <h1 class="text-4xl font-bold text-gray-800 mb-4">
+                <i class="fas fa-robot mr-3 text-blue-600"></i>LingByte Demo
+            </h1>
+            <p class="text-xl text-gray-600">AI 对话 & 数据看板</p>
+        </div>
+
+        <div class="grid md:grid-cols-2 gap-8 max-w-4xl mx-auto">
+            <!-- AI 对话 -->
+            <a href="chat.html" class="group bg-white rounded-xl shadow-lg p-8 hover:shadow-xl transition-all duration-300 hover:-translate-y-1">
+                <div class="text-center">
+                    <div class="w-16 h-16 bg-blue-100 rounded-full flex items-center justify-center mx-auto mb-4 group-hover:bg-blue-200 transition-colors">
+                        <i class="fas fa-comments text-2xl text-blue-600"></i>
+                    </div>
+                    <h3 class="text-xl font-semibold text-gray-800 mb-2">AI 对话</h3>
+                    <p class="text-gray-600">与 LingByte AI 进行对话，支持多会话管理</p>
+                    <div class="mt-4 text-blue-600 font-medium group-hover:text-blue-700">
+                        开始对话 <i class="fas fa-arrow-right ml-2"></i>
+                    </div>
+                </div>
+            </a>
+
+            <!-- 数据看板 -->
+            <a href="data.html" class="group bg-white rounded-xl shadow-lg p-8 hover:shadow-xl transition-all duration-300 hover:-translate-y-1">
+                <div class="text-center">
+                    <div class="w-16 h-16 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-4 group-hover:bg-green-200 transition-colors">
+                        <i class="fas fa-chart-line text-2xl text-green-600"></i>
+                    </div>
+                    <h3 class="text-xl font-semibold text-gray-800 mb-2">数据看板</h3>
+                    <p class="text-gray-600">查看会话、消息和用量统计数据</p>
+                    <div class="mt-4 text-green-600 font-medium group-hover:text-green-700">
+                        查看数据 <i class="fas fa-arrow-right ml-2"></i>
+                    </div>
+                </div>
+            </a>
+        </div>
+
+        <div class="text-center mt-12">
+            <p class="text-gray-500">
+                <i class="fas fa-info-circle mr-2"></i>
+                请确保服务已启动，访问 <code class="bg-gray-200 px-2 py-1 rounded">/api</code> 接口可用
+            </p>
+        </div>
+    </div>
+</body>
+</html>

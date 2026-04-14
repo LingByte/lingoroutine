@@ -76,6 +76,19 @@ type QueryOptions struct {
 	// EnableSelfQueryJSONOutput requests strict JSON object replies (response_format json_object on OpenaiHandler).
 	// SelfQueryExtractor sets this by default; other handlers may ignore it and still return parseable text.
 	EnableSelfQueryJSONOutput bool
+	// Messages allows callers to pass short-term conversation history explicitly.
+	// Handlers append current user text as the final user turn when needed.
+	Messages []ChatMessage
+
+	// 新增字段用于数据库记录
+	SessionID   string // 会话ID
+	UserID      string // 用户ID
+	RequestType string // 请求类型: query, query_stream, rewrite, expand
+}
+
+type ChatMessage struct {
+	Role    string
+	Content string
 }
 
 type TokenUsage struct {
@@ -105,14 +118,21 @@ type QueryChoice struct {
 }
 
 type QueryResponse struct {
-	Provider string
-	Model    string
-	Choices  []QueryChoice
-	Usage    *TokenUsage
-	// Expansion contains query expansion results if enabled
-	Expansion *QueryExpansion
-	// Rewrite contains query rewrite results if enabled
-	Rewrite *QueryRewrite
+	Provider     string          `json:"provider"`
+	Model        string          `json:"model"`
+	Choices      []QueryChoice   `json:"choices"`
+	Usage        *TokenUsage     `json:"usage"`
+	Expansion    *QueryExpansion `json:"expansion,omitempty"`
+	Rewrite      *QueryRewrite   `json:"rewrite,omitempty"`
+	FinishReason string          `json:"finish_reason,omitempty"`
+
+	// 新增字段用于数据库记录
+	RequestID   string `json:"request_id"`
+	SessionID   string `json:"session_id"`
+	UserID      string `json:"user_id"`
+	RequestedAt int64  `json:"requested_at"`
+	CompletedAt int64  `json:"completed_at"`
+	LatencyMs   int64  `json:"latency_ms"`
 }
 
 // QueryRewrite records the optional LLM rewrite step applied before expansion / main completion.
@@ -174,4 +194,91 @@ func GenerateLingRequestID() string {
 	host, _ := os.Hostname()
 	c := atomic.AddUint64(&requestCounter, 1)
 	return fmt.Sprintf("ling-%s-%d-%d-%d", host, os.Getpid(), time.Now().UnixNano(), c)
+}
+
+// 信号类型定义
+const (
+	// LLM调用相关信号
+	SignalLLMRequestStart = "llm.request.start"
+	SignalLLMRequestEnd   = "llm.request.end"
+	SignalLLMRequestError = "llm.request.error"
+
+	// 会话相关信号
+	SignalSessionCreated = "session.created"
+	SignalSessionUpdated = "session.updated"
+	SignalSessionDeleted = "session.deleted"
+
+	// 消息相关信号
+	SignalMessageCreated = "message.created"
+	SignalMessageUpdated = "message.updated"
+	SignalMessageDeleted = "message.deleted"
+)
+
+// LLMRequestStartData LLM请求开始信号数据
+type LLMRequestStartData struct {
+	RequestID   string `json:"request_id"`
+	SessionID   string `json:"session_id"`
+	UserID      string `json:"user_id"`
+	Provider    string `json:"provider"`
+	Model       string `json:"model"`
+	RequestType string `json:"request_type"`
+	Input       string `json:"input"`
+	RequestedAt int64  `json:"requested_at"`
+}
+
+// LLMRequestEndData LLM请求结束信号数据
+type LLMRequestEndData struct {
+	RequestID    string `json:"request_id"`
+	SessionID    string `json:"session_id"`
+	UserID       string `json:"user_id"`
+	Provider     string `json:"provider"`
+	Model        string `json:"model"`
+	RequestType  string `json:"request_type"`
+	Success      bool   `json:"success"`
+	InputTokens  int    `json:"input_tokens"`
+	OutputTokens int    `json:"output_tokens"`
+	TotalTokens  int    `json:"total_tokens"`
+	LatencyMs    int64  `json:"latency_ms"`
+	Output       string `json:"output"`
+	RequestedAt  int64  `json:"requested_at"`
+	CompletedAt  int64  `json:"completed_at"`
+}
+
+// LLMRequestErrorData LLM请求错误信号数据
+type LLMRequestErrorData struct {
+	RequestID    string `json:"request_id"`
+	SessionID    string `json:"session_id"`
+	UserID       string `json:"user_id"`
+	Provider     string `json:"provider"`
+	Model        string `json:"model"`
+	RequestType  string `json:"request_type"`
+	ErrorCode    string `json:"error_code"`
+	ErrorMessage string `json:"error_message"`
+	LatencyMs    int64  `json:"latency_ms"`
+	RequestedAt  int64  `json:"requested_at"`
+	CompletedAt  int64  `json:"completed_at"`
+}
+
+// SessionCreatedData 会话创建信号数据
+type SessionCreatedData struct {
+	SessionID    string `json:"session_id"`
+	UserID       string `json:"user_id"`
+	Title        string `json:"title"`
+	Provider     string `json:"provider"`
+	Model        string `json:"model"`
+	SystemPrompt string `json:"system_prompt"`
+	CreatedAt    int64  `json:"created_at"`
+}
+
+// MessageCreatedData 消息创建信号数据
+type MessageCreatedData struct {
+	MessageID  string `json:"message_id"`
+	SessionID  string `json:"session_id"`
+	Role       string `json:"role"`
+	Content    string `json:"content"`
+	TokenCount int    `json:"token_count"`
+	Model      string `json:"model"`
+	Provider   string `json:"provider"`
+	RequestID  string `json:"request_id"`
+	CreatedAt  int64  `json:"created_at"`
 }

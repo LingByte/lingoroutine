@@ -11,8 +11,7 @@ import (
 	"net/http"
 	"strings"
 	"time"
-
-	)
+)
 
 type LMStudioHandler struct {
 	ctx          context.Context
@@ -34,7 +33,7 @@ func NewLMStudioHandler(ctx context.Context, llmOptions *LLMOptions) (*LMStudioH
 	if strings.TrimSpace(opts.ApiKey) == "" {
 		opts.ApiKey = "lmstudio"
 	}
-		return &LMStudioHandler{
+	return &LMStudioHandler{
 		ctx:          ctx,
 		baseURL:      strings.TrimRight(strings.TrimSpace(opts.BaseURL), "/"),
 		apiKey:       strings.TrimSpace(opts.ApiKey),
@@ -59,10 +58,23 @@ func (h *LMStudioHandler) QueryWithOptions(text string, options *QueryOptions) (
 	if options == nil {
 		options = &QueryOptions{}
 	}
+	requestType := strings.TrimSpace(options.RequestType)
+	if requestType == "" {
+		requestType = "query"
+	}
 	model := strings.TrimSpace(options.Model)
 	if model == "" {
-		model = "local-model"
+		model = "llama3.1"
 	}
+
+	tracker := NewLLMRequestTracker(
+		options.SessionID,
+		options.UserID,
+		"lmstudio",
+		model,
+		h.baseURL,
+		requestType,
+	)
 	reqCtx, cancel := context.WithCancel(h.ctx)
 	defer cancel()
 	go func() {
@@ -99,12 +111,13 @@ func (h *LMStudioHandler) QueryWithOptions(text string, options *QueryOptions) (
 
 	body := map[string]any{
 		"model":       model,
-		"messages":    []map[string]string{{"role": "user", "content": text}},
+		"messages":    chatMessagesToMap(buildShortTermMessages(text, options)),
 		"stream":      false,
 		"temperature": options.Temperature,
 	}
 	raw, err := h.doChatCompletion(reqCtx, body)
 	if err != nil {
+		tracker.Error("LMSTUDIO_REQUEST_ERROR", err.Error())
 		return nil, err
 	}
 	var parsed struct {
@@ -121,6 +134,7 @@ func (h *LMStudioHandler) QueryWithOptions(text string, options *QueryOptions) (
 		} `json:"usage"`
 	}
 	if err := json.Unmarshal(raw, &parsed); err != nil {
+		tracker.Error("JSON_PARSE_ERROR", err.Error())
 		return nil, err
 	}
 	content := ""
@@ -131,7 +145,7 @@ func (h *LMStudioHandler) QueryWithOptions(text string, options *QueryOptions) (
 			reason = parsed.Choices[0].FinishReason
 		}
 	}
-	return &QueryResponse{
+	resp := &QueryResponse{
 		Provider:  h.Provider(),
 		Model:     model,
 		Choices:   []QueryChoice{{Index: 0, Content: content, FinishReason: reason}},
@@ -142,17 +156,33 @@ func (h *LMStudioHandler) QueryWithOptions(text string, options *QueryOptions) (
 			CompletionTokens: parsed.Usage.CompletionTokens,
 			TotalTokens:      parsed.Usage.TotalTokens,
 		},
-	}, nil
+	}
+
+	tracker.Complete(resp)
+	return resp, nil
 }
 
 func (h *LMStudioHandler) QueryStream(text string, options *QueryOptions, callback func(segment string, isComplete bool) error) (*QueryResponse, error) {
 	if options == nil {
 		options = &QueryOptions{}
 	}
+	requestType := strings.TrimSpace(options.RequestType)
+	if requestType == "" {
+		requestType = "stream"
+	}
 	model := strings.TrimSpace(options.Model)
 	if model == "" {
 		model = "local-model"
 	}
+
+	tracker := NewLLMRequestTracker(
+		options.SessionID,
+		options.UserID,
+		"lmstudio",
+		model,
+		h.baseURL,
+		requestType,
+	)
 	reqCtx, cancel := context.WithCancel(h.ctx)
 	defer cancel()
 	go func() {
@@ -188,13 +218,14 @@ func (h *LMStudioHandler) QueryStream(text string, options *QueryOptions, callba
 
 	body := map[string]any{
 		"model":       model,
-		"messages":    []map[string]string{{"role": "user", "content": text}},
+		"messages":    chatMessagesToMap(buildShortTermMessages(text, options)),
 		"stream":      true,
 		"temperature": options.Temperature,
 	}
 	b, _ := json.Marshal(body)
 	req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, h.baseURL+"/chat/completions", bytes.NewReader(b))
 	if err != nil {
+		tracker.Error("LMSTUDIO_REQUEST_ERROR", err.Error())
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
@@ -203,6 +234,7 @@ func (h *LMStudioHandler) QueryStream(text string, options *QueryOptions, callba
 	}
 	resp, err := h.client.Do(req)
 	if err != nil {
+		tracker.Error("LMSTUDIO_REQUEST_ERROR", err.Error())
 		return nil, err
 	}
 	defer resp.Body.Close()
@@ -269,7 +301,6 @@ func (h *LMStudioHandler) Interrupt() {
 	default:
 	}
 }
-
 
 func (h *LMStudioHandler) rewriteQueryChatCompletions(ctx context.Context, text string, options *QueryOptions) (string, error) {
 	if options == nil {
@@ -377,4 +408,3 @@ func (h *LMStudioHandler) doChatCompletion(ctx context.Context, body map[string]
 	}
 	return raw, nil
 }
-

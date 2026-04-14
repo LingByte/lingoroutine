@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LingByte AI Chat</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        .chat-scroll::-webkit-scrollbar { width: 6px; }
+        .chat-scroll::-webkit-scrollbar-track { background: #f1f1f1; }
+        .chat-scroll::-webkit-scrollbar-thumb { background: #888; border-radius: 3px; }
+        .chat-scroll::-webkit-scrollbar-thumb:hover { background: #555; }
+    </style>
+</head>
+<body class="bg-gray-50 h-screen overflow-hidden">
+    <!-- 左侧会话列表 -->
+    <div class="flex h-full">
+        <aside class="w-64 bg-white border-r border-gray-200 flex flex-col">
+            <div class="p-4 border-b border-gray-200">
+                <button onclick="newSession()" class="w-full bg-blue-600 text-white rounded-lg px-4 py-2 hover:bg-blue-700 transition-colors">
+                    <i class="fas fa-plus mr-2"></i>新会话
+                </button>
+            </div>
+            <div id="sessionList" class="flex-1 overflow-y-auto p-2 space-y-1">
+                <!-- 会话列表动态生成 -->
+            </div>
+        </aside>
+
+        <!-- 右侧聊天区 -->
+        <main class="flex-1 flex flex-col bg-white">
+            <header class="border-b border-gray-200 px-6 py-4">
+                <h1 id="chatTitle" class="text-xl font-semibold text-gray-800">LingByte AI Chat</h1>
+            </header>
+
+            <div id="chatMessages" class="flex-1 overflow-y-auto px-6 py-4 space-y-4 chat-scroll">
+                <!-- 消息动态生成 -->
+            </div>
+
+            <footer class="border-t border-gray-200 px-6 py-4">
+                <div class="flex space-x-4">
+                    <textarea 
+                        id="messageInput"
+                        class="flex-1 resize-none border border-gray-300 rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                        placeholder="输入消息..."
+                        rows="3"
+                        onkeydown="handleKeyDown(event)"
+                    ></textarea>
+                    <button 
+                        onclick="sendMessage()"
+                        class="bg-blue-600 text-white rounded-lg px-6 py-2 hover:bg-blue-700 transition-colors flex items-center"
+                    >
+                        <i class="fas fa-paper-plane mr-2"></i>发送
+                    </button>
+                </div>
+            </footer>
+        </main>
+    </div>
+
+    <script>
+        const API_BASE = window.location.origin + '/api';
+        let currentSessionId = null;
+        let sessions = [];
+
+        // 初始化
+        document.addEventListener('DOMContentLoaded', () => {
+            loadSessions();
+            if (!currentSessionId) {
+                newSession();
+            }
+        });
+
+        // 加载会话列表
+        async function loadSessions() {
+            try {
+                const res = await fetch(`${API_BASE}/llm/sessions`);
+                const data = await res.json();
+                if (data.code === 200) {
+                    sessions = data.data || [];
+                    renderSessionList();
+                }
+            } catch (e) {
+                console.error('加载会话失败:', e);
+            }
+        }
+
+        // 渲染会话列表
+        function renderSessionList() {
+            const list = document.getElementById('sessionList');
+            list.innerHTML = sessions.map(s => `
+                <div 
+                    class="p-3 rounded-lg cursor-pointer transition-colors ${s.id === currentSessionId ? 'bg-blue-50 border-l-4 border-blue-600' : 'hover:bg-gray-100'}"
+                    onclick="selectSession('${s.id}')"
+                >
+                    <div class="font-medium text-gray-800 truncate">${s.title || '未命名会话'}</div>
+                    <div class="text-sm text-gray-500">${new Date(s.created_at).toLocaleString()}</div>
+                </div>
+            `).join('');
+        }
+
+        // 新建会话
+        function newSession() {
+            currentSessionId = 'temp-' + Date.now();
+            document.getElementById('chatTitle').textContent = '新会话';
+            document.getElementById('chatMessages').innerHTML = '';
+            document.getElementById('messageInput').focus();
+            renderSessionList();
+        }
+
+        // 选择会话
+        function selectSession(sessionId) {
+            currentSessionId = sessionId;
+            const session = sessions.find(s => s.id === sessionId);
+            document.getElementById('chatTitle').textContent = session?.title || '未命名会话';
+            loadMessages();
+            renderSessionList();
+        }
+
+        // 加载消息
+        async function loadMessages() {
+            if (!currentSessionId || currentSessionId.startsWith('temp-')) return;
+            try {
+                const res = await fetch(`${API_BASE}/llm/sessions/${currentSessionId}/messages`);
+                const data = await res.json();
+                if (data.code === 200) {
+                    renderMessages(data.data || []);
+                }
+            } catch (e) {
+                console.error('加载消息失败:', e);
+            }
+        }
+
+        // 渲染消息
+        function renderMessages(messages) {
+            const container = document.getElementById('chatMessages');
+            container.innerHTML = messages.map(msg => `
+                <div class="flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}">
+                    <div class="max-w-lg ${msg.role === 'user' ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-800'} rounded-lg px-4 py-2">
+                        <div class="text-sm">${msg.content}</div>
+                        <div class="text-xs ${msg.role === 'user' ? 'text-blue-100' : 'text-gray-500'} mt-1">
+                            ${new Date(msg.created_at).toLocaleTimeString()}
+                        </div>
+                    </div>
+                </div>
+            `).join('');
+            container.scrollTop = container.scrollHeight;
+        }
+
+        // 发送消息
+        async function sendMessage() {
+            const input = document.getElementById('messageInput');
+            const content = input.value.trim();
+            if (!content) return;
+
+            // 如果是临时会话，先创建会话
+            if (currentSessionId.startsWith('temp-')) {
+                await createSession();
+            }
+
+            // 添加用户消息到界面
+            addMessageToUI('user', content);
+            input.value = '';
+
+            try {
+                const res = await fetch(`${API_BASE}/llm/chat`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        session_id: currentSessionId,
+                        user_id: 'web-user',
+                        input: content
+                    })
+                });
+
+                const data = await res.json();
+                if (data.code === 200) {
+                    const resp = data.data;
+                    addMessageToUI('assistant', resp.output);
+                    
+                    // 如果是新会话，刷新会话列表
+                    if (!sessions.find(s => s.id === currentSessionId)) {
+                        loadSessions();
+                    }
+                } else {
+                    addMessageToUI('assistant', `错误: ${data.msg}`);
+                }
+            } catch (e) {
+                addMessageToUI('assistant', `网络错误: ${e.message}`);
+            }
+        }
+
+        // 创建会话
+        async function createSession() {
+            try {
+                const res = await fetch(`${API_BASE}/llm/sessions`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        user_id: 'web-user',
+                        title: '新会话'
+                    })
+                });
+
+                const data = await res.json();
+                if (data.code === 200) {
+                    currentSessionId = data.data.id;
+                    document.getElementById('chatTitle').textContent = data.data.title;
+                }
+            } catch (e) {
+                console.error('创建会话失败:', e);
+            }
+        }
+
+        // 添加消息到界面
+        function addMessageToUI(role, content) {
+            const container = document.getElementById('chatMessages');
+            const msgDiv = document.createElement('div');
+            msgDiv.className = `flex ${role === 'user' ? 'justify-end' : 'justify-start'}`;
+            msgDiv.innerHTML = `
+                <div class="max-w-lg ${role === 'user' ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-800'} rounded-lg px-4 py-2">
+                    <div class="text-sm">${content}</div>
+                    <div class="text-xs ${role === 'user' ? 'text-blue-100' : 'text-gray-500'} mt-1">
+                        ${new Date().toLocaleTimeString()}
+                    </div>
+                </div>
+            `;
+            container.appendChild(msgDiv);
+            container.scrollTop = container.scrollHeight;
+        }
+
+        // 键盘事件
+        function handleKeyDown(event) {
+            if (event.key === 'Enter' && !event.shiftKey) {
+                event.preventDefault();
+                sendMessage();
+            }
+        }
+    </script>
+</body>
+</html>

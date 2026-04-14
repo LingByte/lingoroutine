@@ -11,8 +11,7 @@ import (
 	"net/http"
 	"strings"
 	"time"
-
-	)
+)
 
 type AnthropicHandler struct {
 	ctx          context.Context
@@ -31,7 +30,7 @@ func NewAnthropicHandler(ctx context.Context, llmOptions *LLMOptions) (*Anthropi
 	if strings.TrimSpace(opts.BaseURL) == "" {
 		opts.BaseURL = "https://api.anthropic.com"
 	}
-		return &AnthropicHandler{
+	return &AnthropicHandler{
 		ctx:          ctx,
 		baseURL:      strings.TrimRight(strings.TrimSpace(opts.BaseURL), "/"),
 		apiKey:       strings.TrimSpace(opts.ApiKey),
@@ -56,10 +55,23 @@ func (h *AnthropicHandler) QueryWithOptions(text string, options *QueryOptions) 
 	if options == nil {
 		options = &QueryOptions{}
 	}
+	requestType := strings.TrimSpace(options.RequestType)
+	if requestType == "" {
+		requestType = "query"
+	}
 	model := strings.TrimSpace(options.Model)
 	if model == "" {
-		model = "claude-3-5-sonnet-20241022"
+		model = "claude-3-sonnet-20240229"
 	}
+
+	tracker := NewLLMRequestTracker(
+		options.SessionID,
+		options.UserID,
+		"anthropic",
+		model,
+		h.baseURL,
+		requestType,
+	)
 	reqCtx, cancel := context.WithCancel(h.ctx)
 	defer cancel()
 	go func() {
@@ -94,18 +106,20 @@ func (h *AnthropicHandler) QueryWithOptions(text string, options *QueryOptions) 
 		}
 	}
 
-	userMsgs := []map[string]any{{"role": "user", "content": text}}
+	chatMessages := buildShortTermMessages(text, options)
+	userMsgs := chatMessagesToAnthropic(chatMessages)
 	reqBody := map[string]any{
 		"model":       model,
 		"max_tokens":  max(256, options.MaxTokens),
 		"temperature": options.Temperature,
 		"messages":    userMsgs,
 	}
-	if sys := appendEmotionalStyle(h.systemPrompt, options); strings.TrimSpace(sys) != "" {
+	if sys := appendEmotionalStyle(mergedSystemPrompt(h.systemPrompt, chatMessages), options); strings.TrimSpace(sys) != "" {
 		reqBody["system"] = sys
 	}
 	raw, err := h.doAnthropic(reqCtx, reqBody)
 	if err != nil {
+		tracker.Error("ANTHROPIC_REQUEST_ERROR", err.Error())
 		return nil, err
 	}
 	var parsed struct {
@@ -120,6 +134,7 @@ func (h *AnthropicHandler) QueryWithOptions(text string, options *QueryOptions) 
 		} `json:"usage"`
 	}
 	if err := json.Unmarshal(raw, &parsed); err != nil {
+		tracker.Error("JSON_PARSE_ERROR", err.Error())
 		return nil, err
 	}
 	var b strings.Builder
@@ -133,7 +148,7 @@ func (h *AnthropicHandler) QueryWithOptions(text string, options *QueryOptions) 
 	if reason == "" {
 		reason = "stop"
 	}
-	return &QueryResponse{
+	resp := &QueryResponse{
 		Provider:  h.Provider(),
 		Model:     model,
 		Choices:   []QueryChoice{{Index: 0, Content: answer, FinishReason: reason}},
@@ -144,7 +159,10 @@ func (h *AnthropicHandler) QueryWithOptions(text string, options *QueryOptions) 
 			CompletionTokens: parsed.Usage.OutputTokens,
 			TotalTokens:      parsed.Usage.InputTokens + parsed.Usage.OutputTokens,
 		},
-	}, nil
+	}
+
+	tracker.Complete(resp)
+	return resp, nil
 }
 
 func (h *AnthropicHandler) QueryStream(text string, options *QueryOptions, callback func(segment string, isComplete bool) error) (*QueryResponse, error) {
@@ -188,14 +206,15 @@ func (h *AnthropicHandler) QueryStream(text string, options *QueryOptions, callb
 		}
 	}
 
+	chatMessages := buildShortTermMessages(text, options)
 	reqBody := map[string]any{
 		"model":       model,
 		"max_tokens":  max(256, options.MaxTokens),
 		"temperature": options.Temperature,
-		"messages":    []map[string]any{{"role": "user", "content": text}},
+		"messages":    chatMessagesToAnthropic(chatMessages),
 		"stream":      true,
 	}
-	if sys := appendEmotionalStyle(h.systemPrompt, options); strings.TrimSpace(sys) != "" {
+	if sys := appendEmotionalStyle(mergedSystemPrompt(h.systemPrompt, chatMessages), options); strings.TrimSpace(sys) != "" {
 		reqBody["system"] = sys
 	}
 	b, _ := json.Marshal(reqBody)
@@ -273,7 +292,6 @@ func (h *AnthropicHandler) Interrupt() {
 	default:
 	}
 }
-
 
 func (h *AnthropicHandler) rewriteQueryAnthropic(ctx context.Context, text string, options *QueryOptions) (string, error) {
 	if options == nil {
@@ -398,4 +416,3 @@ func max(a, b int) int {
 	}
 	return b
 }
-

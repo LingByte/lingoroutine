@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/coze-dev/coze-go"
-	)
+)
 
 type CozeHandler struct {
 	client       coze.CozeAPI
@@ -47,7 +47,7 @@ func NewCozeHandler(ctx context.Context, llmOptions *LLMOptions) (*CozeHandler, 
 	if strings.TrimSpace(cfg.BaseURL) != "" {
 		client = coze.NewCozeAPI(authClient, coze.WithBaseURL(strings.TrimSpace(cfg.BaseURL)))
 	}
-		return &CozeHandler{
+	return &CozeHandler{
 		client:       client,
 		ctx:          ctx,
 		botID:        cfg.BotID,
@@ -72,6 +72,23 @@ func (h *CozeHandler) QueryWithOptions(text string, options *QueryOptions) (*Que
 	if options == nil {
 		options = &QueryOptions{}
 	}
+	requestType := strings.TrimSpace(options.RequestType)
+	if requestType == "" {
+		requestType = "query"
+	}
+	model := options.Model
+	if model == "" {
+		model = "coze-chat"
+	}
+
+	tracker := NewLLMRequestTracker(
+		options.SessionID,
+		options.UserID,
+		"coze",
+		model,
+		"https://api.coze.com",
+		requestType,
+	)
 	var rewrite *QueryRewrite
 	if options.EnableQueryRewrite {
 		before := text
@@ -108,6 +125,7 @@ func (h *CozeHandler) QueryWithOptions(text string, options *QueryOptions) (*Que
 	defer cancel()
 	stream, err := h.client.Chat.Stream(ctx, req)
 	if err != nil {
+		tracker.Error("COZE_REQUEST_ERROR", err.Error())
 		return nil, err
 	}
 	defer stream.Close()
@@ -133,19 +151,38 @@ func (h *CozeHandler) QueryWithOptions(text string, options *QueryOptions) (*Que
 		}
 	}
 	answer := strings.TrimSpace(out.String())
-		return &QueryResponse{
-			Model:     options.Model,
+	resp := &QueryResponse{
+		Model:     options.Model,
 		Choices:   []QueryChoice{{Index: 0, Content: answer, FinishReason: "stop"}},
 		Expansion: expansion,
 		Rewrite:   rewrite,
-	}, nil
+	}
+	tracker.Complete(resp)
+	return resp, nil
 }
 
 func (h *CozeHandler) QueryStream(text string, options *QueryOptions, callback func(segment string, isComplete bool) error) (*QueryResponse, error) {
 	if options == nil {
 		options = &QueryOptions{}
 	}
-		var streamRewrite *QueryRewrite
+	requestType := strings.TrimSpace(options.RequestType)
+	if requestType == "" {
+		requestType = "stream"
+	}
+	model := options.Model
+	if model == "" {
+		model = "coze-chat"
+	}
+
+	tracker := NewLLMRequestTracker(
+		options.SessionID,
+		options.UserID,
+		"coze",
+		model,
+		"https://api.coze.com",
+		requestType,
+	)
+	var streamRewrite *QueryRewrite
 	if options.EnableQueryRewrite {
 		before := text
 		rw, err := h.rewriteQueryCoze(h.ctx, before, options)
@@ -179,6 +216,7 @@ func (h *CozeHandler) QueryStream(text string, options *QueryOptions, callback f
 	defer cancel()
 	stream, err := h.client.Chat.Stream(ctx, req)
 	if err != nil {
+		tracker.Error("COZE_REQUEST_ERROR", err.Error())
 		return nil, err
 	}
 	defer stream.Close()
@@ -215,8 +253,8 @@ func (h *CozeHandler) QueryStream(text string, options *QueryOptions, callback f
 		}
 	}
 	answer := strings.TrimSpace(out.String())
-		return &QueryResponse{
-			Model:     options.Model,
+	return &QueryResponse{
+		Model:     options.Model,
 		Choices:   []QueryChoice{{Index: 0, Content: answer, FinishReason: "stop"}},
 		Rewrite:   streamRewrite,
 		Expansion: streamExpansion,
@@ -232,17 +270,23 @@ func (h *CozeHandler) Interrupt() {
 	}
 }
 
-
-
 func (h *CozeHandler) cozeMessagesForChat(userText string, opts *QueryOptions) []coze.Message {
 	out := make([]coze.Message, 0, 8)
-	sysCore := strings.TrimSpace(h.systemPrompt)
-	if sysCore != "" {
-		out = append(out, coze.Message{Role: coze.MessageRoleUser, Content: "System: " + appendEmotionalStyle(sysCore, opts)})
-	} else if emotionalToneEnabled(opts) {
-		out = append(out, coze.Message{Role: coze.MessageRoleUser, Content: "System: " + appendEmotionalStyle("", opts)})
+	chatMessages := buildShortTermMessages(userText, opts)
+	sysCore := appendEmotionalStyle(mergedSystemPrompt(h.systemPrompt, chatMessages), opts)
+	if strings.TrimSpace(sysCore) != "" {
+		out = append(out, coze.Message{Role: coze.MessageRoleUser, Content: "System: " + sysCore})
 	}
-	out = append(out, coze.Message{Role: coze.MessageRoleUser, Content: userText})
+	for _, m := range chatMessages {
+		switch m.Role {
+		case "assistant":
+			out = append(out, coze.Message{Role: coze.MessageRoleAssistant, Content: m.Content})
+		case "system":
+			// system is merged into a synthetic system line.
+		default:
+			out = append(out, coze.Message{Role: coze.MessageRoleUser, Content: m.Content})
+		}
+	}
 	return out
 }
 

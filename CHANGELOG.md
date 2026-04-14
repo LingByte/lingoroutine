@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-04-14
+
+### Changed
+- LLM request tracking now generates `RequestID` with `ling-chatimpl-` prefix.
+- LLM handlers (OpenAI) complete/error paths integrate request tracking so `RequestID`/`LatencyMs` are populated on `QueryResponse`.
+
+### Added
+- Signal-based LLM usage emission (`LLMUsage`) and lightweight signal payloads for session/message lifecycle.
+- Example wiring in `usage_example_fixed.go` using `utils.Sig().Connect(...)` to persist chat/session/message/usage records without a service layer.
+
 ### Added
 - Version management system
 - Makefile for build automation

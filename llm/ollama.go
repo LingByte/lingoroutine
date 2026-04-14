@@ -11,8 +11,7 @@ import (
 	"net/http"
 	"strings"
 	"time"
-
-	)
+)
 
 type OllamaHandler struct {
 	ctx          context.Context
@@ -31,7 +30,7 @@ func NewOllamaHandler(ctx context.Context, llmOptions *LLMOptions) (*OllamaHandl
 	if strings.TrimSpace(opts.ApiKey) == "" {
 		opts.ApiKey = "ollama"
 	}
-		return &OllamaHandler{
+	return &OllamaHandler{
 		ctx:          ctx,
 		baseURL:      strings.TrimRight(strings.TrimSpace(opts.BaseURL), "/"),
 		apiKey:       strings.TrimSpace(opts.ApiKey),
@@ -56,10 +55,23 @@ func (h *OllamaHandler) QueryWithOptions(text string, options *QueryOptions) (*Q
 	if options == nil {
 		options = &QueryOptions{}
 	}
+	requestType := strings.TrimSpace(options.RequestType)
+	if requestType == "" {
+		requestType = "query"
+	}
 	model := strings.TrimSpace(options.Model)
 	if model == "" {
-		model = "llama3.1"
+		model = "llama2"
 	}
+
+	tracker := NewLLMRequestTracker(
+		options.SessionID,
+		options.UserID,
+		"ollama",
+		model,
+		h.baseURL,
+		requestType,
+	)
 	reqCtx, cancel := context.WithCancel(h.ctx)
 	defer cancel()
 	go func() {
@@ -94,7 +106,7 @@ func (h *OllamaHandler) QueryWithOptions(text string, options *QueryOptions) (*Q
 		}
 	}
 
-	msgs := []map[string]string{{"role": "user", "content": text}}
+	msgs := chatMessagesToMap(buildShortTermMessages(text, options))
 	body := map[string]any{
 		"model":       model,
 		"messages":    msgs,
@@ -103,6 +115,7 @@ func (h *OllamaHandler) QueryWithOptions(text string, options *QueryOptions) (*Q
 	}
 	raw, err := h.doChatCompletion(reqCtx, body)
 	if err != nil {
+		tracker.Error("OLLAMA_REQUEST_ERROR", err.Error())
 		return nil, err
 	}
 	var parsed struct {
@@ -119,6 +132,7 @@ func (h *OllamaHandler) QueryWithOptions(text string, options *QueryOptions) (*Q
 		} `json:"usage"`
 	}
 	if err := json.Unmarshal(raw, &parsed); err != nil {
+		tracker.Error("JSON_PARSE_ERROR", err.Error())
 		return nil, err
 	}
 	content := ""
@@ -129,8 +143,8 @@ func (h *OllamaHandler) QueryWithOptions(text string, options *QueryOptions) (*Q
 			reason = parsed.Choices[0].FinishReason
 		}
 	}
-	return &QueryResponse{
-			Model:     model,
+	resp := &QueryResponse{
+		Model:     model,
 		Choices:   []QueryChoice{{Index: 0, Content: content, FinishReason: reason}},
 		Expansion: expansion,
 		Rewrite:   rewrite,
@@ -139,17 +153,33 @@ func (h *OllamaHandler) QueryWithOptions(text string, options *QueryOptions) (*Q
 			CompletionTokens: parsed.Usage.CompletionTokens,
 			TotalTokens:      parsed.Usage.TotalTokens,
 		},
-	}, nil
+	}
+
+	tracker.Complete(resp)
+	return resp, nil
 }
 
 func (h *OllamaHandler) QueryStream(text string, options *QueryOptions, callback func(segment string, isComplete bool) error) (*QueryResponse, error) {
 	if options == nil {
 		options = &QueryOptions{}
 	}
+	requestType := strings.TrimSpace(options.RequestType)
+	if requestType == "" {
+		requestType = "stream"
+	}
 	model := strings.TrimSpace(options.Model)
 	if model == "" {
 		model = "llama3.1"
 	}
+
+	tracker := NewLLMRequestTracker(
+		options.SessionID,
+		options.UserID,
+		"ollama",
+		model,
+		h.baseURL,
+		requestType,
+	)
 	reqCtx, cancel := context.WithCancel(h.ctx)
 	defer cancel()
 	go func() {
@@ -183,7 +213,7 @@ func (h *OllamaHandler) QueryStream(text string, options *QueryOptions, callback
 		}
 	}
 
-	msgs := []map[string]string{{"role": "user", "content": text}}
+	msgs := chatMessagesToMap(buildShortTermMessages(text, options))
 	body := map[string]any{
 		"model":       model,
 		"messages":    msgs,
@@ -193,6 +223,7 @@ func (h *OllamaHandler) QueryStream(text string, options *QueryOptions, callback
 	b, _ := json.Marshal(body)
 	req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, h.baseURL+"/chat/completions", bytes.NewReader(b))
 	if err != nil {
+		tracker.Error("OLLAMA_REQUEST_ERROR", err.Error())
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
@@ -201,6 +232,7 @@ func (h *OllamaHandler) QueryStream(text string, options *QueryOptions, callback
 	}
 	resp, err := h.client.Do(req)
 	if err != nil {
+		tracker.Error("OLLAMA_REQUEST_ERROR", err.Error())
 		return nil, err
 	}
 	defer resp.Body.Close()
@@ -270,7 +302,6 @@ func (h *OllamaHandler) Interrupt() {
 	default:
 	}
 }
-
 
 func (h *OllamaHandler) rewriteQueryChatCompletions(ctx context.Context, text string, options *QueryOptions) (string, error) {
 	if options == nil {

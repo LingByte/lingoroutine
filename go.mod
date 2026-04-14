@@ -3,6 +3,8 @@ module github.com/LingByte/lingoroutine
 go 1.25.6
 
 require (
+	github.com/LingByte/CinyuVerse v0.0.0-20260412135731-9d73d162d515
+	github.com/LingByte/lingstorage-sdk-go v0.0.0-20260113030255-ff9d0501909c
 	github.com/PuerkitoBio/goquery v1.12.0
 	github.com/alibabacloud-go/bailian-20231229 v1.11.3
 	github.com/alibabacloud-go/darabonba-openapi/v2 v2.1.16

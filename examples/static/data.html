@@ -1,0 +1,300 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LingByte Data Dashboard</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+<body class="bg-gray-50 min-h-screen">
+    <div class="container mx-auto px-4 py-8">
+        <header class="mb-8">
+            <h1 class="text-3xl font-bold text-gray-800">
+                <i class="fas fa-database mr-3"></i>LingByte 数据看板
+            </h1>
+            <p class="text-gray-600 mt-2">查看 ChatSession、ChatMessage、LLMUsage 数据</p>
+        </header>
+
+        <!-- 标签页 -->
+        <div class="bg-white rounded-lg shadow mb-6">
+            <div class="border-b border-gray-200">
+                <nav class="flex -mb-px">
+                    <button 
+                        onclick="switchTab('sessions')"
+                        id="tab-sessions"
+                        class="tab-btn py-4 px-6 border-b-2 border-blue-500 font-medium text-blue-600"
+                    >
+                        <i class="fas fa-comments mr-2"></i>会话 (ChatSession)
+                    </button>
+                    <button 
+                        onclick="switchTab('messages')"
+                        id="tab-messages"
+                        class="tab-btn py-4 px-6 border-b-2 border-transparent font-medium text-gray-500 hover:text-gray-700"
+                    >
+                        <i class="fas fa-message mr-2"></i>消息 (ChatMessage)
+                    </button>
+                    <button 
+                        onclick="switchTab('usage')"
+                        id="tab-usage"
+                        class="tab-btn py-4 px-6 border-b-2 border-transparent font-medium text-gray-500 hover:text-gray-700"
+                    >
+                        <i class="fas fa-chart-line mr-2"></i>用量 (LLMUsage)
+                    </button>
+                </nav>
+            </div>
+        </div>
+
+        <!-- 内容区 -->
+        <div class="bg-white rounded-lg shadow">
+            <!-- 会话表格 -->
+            <div id="content-sessions" class="tab-content p-6">
+                <div class="flex justify-between items-center mb-4">
+                    <h2 class="text-xl font-semibold text-gray-800">会话列表</h2>
+                    <button onclick="loadData('sessions')" class="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700">
+                        <i class="fas fa-refresh mr-2"></i>刷新
+                    </button>
+                </div>
+                <div class="overflow-x-auto">
+                    <table class="min-w-full divide-y divide-gray-200">
+                        <thead class="bg-gray-50">
+                            <tr>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">ID</th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">用户ID</th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">标题</th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">提供商</th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">模型</th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">状态</th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">创建时间</th>
+                            </tr>
+                        </thead>
+                        <tbody id="sessions-tbody" class="bg-white divide-y divide-gray-200">
+                            <!-- 动态生成 -->
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- 消息表格 -->
+            <div id="content-messages" class="tab-content p-6 hidden">
+                <div class="flex justify-between items-center mb-4">
+                    <h2 class="text-xl font-semibold text-gray-800">消息列表</h2>
+                    <button onclick="loadData('messages')" class="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700">
+                        <i class="fas fa-refresh mr-2"></i>刷新
+                    </button>
+                </div>
+                <div class="overflow-x-auto">
+                    <table class="min-w-full divide-y divide-gray-200">
+                        <thead class="bg-gray-50">
+                            <tr>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">ID</th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">会话ID</th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">角色</th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">内容</th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Token数</th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">请求ID</th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">创建时间</th>
+                            </tr>
+                        </thead>
+                        <tbody id="messages-tbody" class="bg-white divide-y divide-gray-200">
+                            <!-- 动态生成 -->
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- 用量表格 -->
+            <div id="content-usage" class="tab-content p-6 hidden">
+                <div class="flex justify-between items-center mb-4">
+                    <h2 class="text-xl font-semibold text-gray-800">用量统计</h2>
+                    <button onclick="loadData('usage')" class="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700">
+                        <i class="fas fa-refresh mr-2"></i>刷新
+                    </button>
+                </div>
+                <div class="overflow-x-auto">
+                    <table class="min-w-full divide-y divide-gray-200">
+                        <thead class="bg-gray-50">
+                            <tr>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">请求ID</th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">会话ID</th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">用户ID</th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">提供商</th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">模型</th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">请求类型</th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">输入Token</th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">输出Token</th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">延迟(ms)</th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">成功</th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">时间</th>
+                            </tr>
+                        </thead>
+                        <tbody id="usage-tbody" class="bg-white divide-y divide-gray-200">
+                            <!-- 动态生成 -->
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const API_BASE = window.location.origin + '/api';
+        let currentTab = 'sessions';
+
+        // 初始化
+        document.addEventListener('DOMContentLoaded', () => {
+            loadData('sessions');
+        });
+
+        // 切换标签
+        function switchTab(tab) {
+            // 更新标签样式
+            document.querySelectorAll('.tab-btn').forEach(btn => {
+                btn.classList.remove('border-blue-500', 'text-blue-600');
+                btn.classList.add('border-transparent', 'text-gray-500');
+            });
+            const activeBtn = document.getElementById(`tab-${tab}`);
+            activeBtn.classList.remove('border-transparent', 'text-gray-500');
+            activeBtn.classList.add('border-blue-500', 'text-blue-600');
+
+            // 切换内容
+            document.querySelectorAll('.tab-content').forEach(content => {
+                content.classList.add('hidden');
+            });
+            document.getElementById(`content-${tab}`).classList.remove('hidden');
+
+            currentTab = tab;
+            loadData(tab);
+        }
+
+        // 加载数据
+        async function formatTime(timeStr) {
+            if (!timeStr) return '-';
+            const date = new Date(timeStr);
+            return date.toLocaleString('zh-CN');
+        }
+        
+        function truncateURL(url) {
+            if (!url) return '-';
+            try {
+                const urlObj = new URL(url);
+                return urlObj.hostname;
+            } catch (e) {
+                return url.length > 20 ? url.substring(0, 20) + '...' : url;
+            }
+        }
+
+        async function loadData(type) {
+            try {
+                let url;
+                switch (type) {
+                    case 'sessions':
+                        url = `${API_BASE}/llm/sessions`;
+                        break;
+                    case 'messages':
+                        url = `${API_BASE}/llm/messages`;
+                        break;
+                    case 'usage':
+                        url = `${API_BASE}/llm/usage`;
+                        break;
+                }
+
+                const res = await fetch(url);
+                const data = await res.json();
+                if (data.code === 200) {
+                    renderTable(type, data.data || []);
+                } else {
+                    console.error('加载数据失败:', data.msg);
+                }
+            } catch (e) {
+                console.error('网络错误:', e);
+            }
+        }
+
+        // 渲染表格
+        function renderTable(type, items) {
+            let tbody;
+            switch (type) {
+                case 'sessions':
+                    tbody = document.getElementById('sessions-tbody');
+                    tbody.innerHTML = items.map(item => `
+                        <tr>
+                            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">${item.id}</td>
+                            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">${item.user_id}</td>
+                            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">${item.title || '-'}</td>
+                            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">${item.provider}</td>
+                            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">${item.model}</td>
+                            <td class="px-6 py-4 whitespace-nowrap">
+                                <span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${item.status === 'active' ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-800'}">
+                                    ${item.status}
+                                </span>
+                            </td>
+                            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${new Date(item.created_at).toLocaleString()}</td>
+                        </tr>
+                    `).join('');
+                    break;
+
+                case 'messages':
+                    tbody = document.getElementById('messages-tbody');
+                    tbody.innerHTML = items.map(item => `
+                        <tr>
+                            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">${item.id}</td>
+                            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">${item.session_id}</td>
+                            <td class="px-6 py-4 whitespace-nowrap">
+                                <span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${item.role === 'user' ? 'bg-blue-100 text-blue-800' : 'bg-green-100 text-green-800'}">
+                                    ${item.role}
+                                </span>
+                            </td>
+                            <td class="px-6 py-4 text-sm text-gray-900 max-w-md truncate" title="${item.content}">${item.content}</td>
+                            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">${item.token_count}</td>
+                            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">${item.request_id || '-'}</td>
+                            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${new Date(item.created_at).toLocaleString()}</td>
+                        </tr>
+                    `).join('');
+                    break;
+
+                case 'usage':
+                    tbody = document.getElementById('usage-tbody');
+                    // API返回的数据结构是 {list: [...], page: 1, size: 50, total: 7}
+                    const usageList = items.list || items;
+                    tbody.innerHTML = usageList.map(item => `
+                        <tr>
+                            <td class="px-4 py-4 whitespace-nowrap text-sm text-gray-900 font-mono text-xs" title="${item.request_id}">${item.request_id ? item.request_id.substring(0, 12) + '...' : '-'}</td>
+                            <td class="px-4 py-4 whitespace-nowrap text-sm text-gray-900 font-mono text-xs" title="${item.session_id}">${item.session_id ? item.session_id.substring(0, 12) + '...' : '-'}</td>
+                            <td class="px-4 py-4 whitespace-nowrap text-sm text-gray-900">${item.user_id || '-'}</td>
+                            <td class="px-4 py-4 whitespace-nowrap text-sm text-gray-900">${item.provider || '-'}</td>
+                            <td class="px-4 py-4 whitespace-nowrap text-sm text-gray-900">${item.model || '-'}</td>
+                            <td class="px-4 py-4 whitespace-nowrap text-sm text-gray-900 max-w-xs truncate" title="${item.base_url || '-'}">${item.base_url || '-'}</td>
+                            <td class="px-4 py-4 whitespace-nowrap text-sm text-gray-900">${item.request_type || '-'}</td>
+                            <td class="px-4 py-4 whitespace-nowrap text-sm text-gray-900">${item.input_tokens || 0}</td>
+                            <td class="px-4 py-4 whitespace-nowrap text-sm text-gray-900">${item.output_tokens || 0}</td>
+                            <td class="px-4 py-4 whitespace-nowrap text-sm text-gray-900">${item.total_tokens || 0}</td>
+                            <td class="px-4 py-4 whitespace-nowrap text-sm text-gray-900">${item.latency_ms || 0}ms</td>
+                            <td class="px-4 py-4 whitespace-nowrap text-sm text-gray-900">${item.ttft_ms || 0}ms</td>
+                            <td class="px-4 py-4 whitespace-nowrap text-sm text-gray-900">${item.tps ? item.tps.toFixed(1) : '0'}</td>
+                            <td class="px-4 py-4 whitespace-nowrap text-sm text-gray-900">${item.queue_time_ms || 0}ms</td>
+                            <td class="px-4 py-4 whitespace-nowrap">
+                                <span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${item.status_code === 200 ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}">
+                                    ${item.status_code || 200}
+                                </span>
+                            </td>
+                            <td class="px-4 py-4 whitespace-nowrap">
+                                <span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${item.success ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}">
+                                    ${item.success ? '成功' : '失败'}
+                                </span>
+                            </td>
+                            <td class="px-4 py-4 whitespace-nowrap text-sm text-gray-900">${item.error_code || '-'}</td>
+                            <td class="px-4 py-4 whitespace-nowrap text-sm text-gray-900 max-w-xs truncate" title="${item.user_agent || '-'}">${item.user_agent ? item.user_agent.substring(0, 30) + '...' : '-'}</td>
+                            <td class="px-4 py-4 whitespace-nowrap text-sm text-gray-900">${item.ip_address || '-'}</td>
+                            <td class="px-4 py-4 whitespace-nowrap text-sm text-gray-500">${new Date(item.requested_at).toLocaleString()}</td>
+                        </tr>
+                    `).join('');
+                    break;
+            }
+        }
+    </script>
+</body>
+</html>
+    </script>
+</body>
+</html>
