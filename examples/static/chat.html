@@ -25,6 +25,13 @@
             <div id="sessionList" class="flex-1 overflow-y-auto p-2 space-y-1">
                 <!-- 会话列表动态生成 -->
             </div>
+            <div class="border-t border-gray-200 p-2">
+                <div class="flex items-center justify-between mb-2">
+                    <div class="text-xs font-semibold text-gray-500">Agent 运行历史</div>
+                    <button onclick="loadAgentRuns()" class="text-xs text-blue-600 hover:text-blue-700">刷新</button>
+                </div>
+                <div id="agentRunList" class="max-h-48 overflow-y-auto space-y-1 text-xs"></div>
+            </div>
         </aside>
 
         <!-- 右侧聊天区 -->
@@ -38,6 +45,22 @@
             </div>
 
             <footer class="border-t border-gray-200 px-6 py-4">
+                <div class="flex items-center justify-between mb-3">
+                    <div class="flex items-center gap-3">
+                        <label class="text-sm text-gray-600">模式</label>
+                        <select id="chatMode" class="border border-gray-300 rounded px-2 py-1 text-sm">
+                            <option value="chat">普通聊天</option>
+                            <option value="agent">Agent 模式</option>
+                        </select>
+                    </div>
+                    <button
+                        id="stopBtn"
+                        onclick="stopCurrentRequest()"
+                        class="hidden bg-red-600 text-white rounded-lg px-4 py-2 hover:bg-red-700 transition-colors text-sm"
+                    >
+                        <i class="fas fa-stop mr-2"></i>终止
+                    </button>
+                </div>
                 <div class="flex space-x-4">
                     <textarea 
                         id="messageInput"
@@ -61,6 +84,10 @@
         const API_BASE = window.location.origin + '/api';
         let currentSessionId = null;
         let sessions = [];
+        let currentAbortController = null;
+        let agentStreamingBubble = null;
+        let agentStreamBuffer = '';
+        let currentAgentRunId = null;
 
         // 初始化
         document.addEventListener('DOMContentLoaded', () => {
@@ -81,6 +108,70 @@
                 }
             } catch (e) {
                 console.error('加载会话失败:', e);
+            }
+        }
+
+        async function loadAgentRuns() {
+            if (!currentSessionId || currentSessionId.startsWith('temp-')) {
+                renderAgentRunList([]);
+                return;
+            }
+            try {
+                const res = await fetch(`${API_BASE}/agent/sessions/${currentSessionId}/runs`);
+                const data = await res.json();
+                if (data.code === 200) {
+                    renderAgentRunList(data.data || []);
+                }
+            } catch (e) {
+                console.error('加载agent运行失败:', e);
+            }
+        }
+
+        function renderAgentRunList(runs) {
+            const box = document.getElementById('agentRunList');
+            if (!runs.length) {
+                box.innerHTML = '<div class="text-gray-400">暂无运行记录</div>';
+                return;
+            }
+            box.innerHTML = runs.map(r => `
+                <div class="p-2 rounded border border-gray-200 hover:bg-gray-50 cursor-pointer ${r.id === currentAgentRunId ? 'bg-blue-50 border-blue-300' : ''}"
+                    onclick="replayAgentRun('${r.id}')">
+                    <div class="font-medium truncate">${r.status || '-'}</div>
+                    <div class="text-gray-500 truncate">${new Date(r.created_at).toLocaleTimeString()}</div>
+                </div>
+            `).join('');
+        }
+
+        async function replayAgentRun(runId) {
+            currentAgentRunId = runId;
+            loadAgentRuns();
+            try {
+                const [runRes, stepRes] = await Promise.all([
+                    fetch(`${API_BASE}/agent/runs/${runId}`),
+                    fetch(`${API_BASE}/agent/runs/${runId}/steps`)
+                ]);
+                const runData = await runRes.json();
+                const stepData = await stepRes.json();
+                if (runData.code !== 200 || stepData.code !== 200) return;
+                const run = runData.data || {};
+                const steps = stepData.data || [];
+                const lines = [];
+                lines.push(`[回放] 运行 ${run.id || runId} (${run.status || '-'})`);
+                lines.push(`目标: ${run.goal || '-'}`);
+                if (run.error_message) {
+                    lines.push(`失败原因: ${run.error_message}`);
+                }
+                if (run.total_tokens !== undefined) {
+                    lines.push(`消耗Tokens: ${run.total_tokens}`);
+                }
+                steps.forEach((s, idx) => {
+                    lines.push(`步骤 ${idx + 1} ${s.step_id || '-'} (${s.status || '-'})`);
+                    if (s.output_text) lines.push(s.output_text);
+                    if (s.error_message) lines.push(`错误: ${s.error_message}`);
+                });
+                addMessageToUI('assistant', lines.join('\n'));
+            } catch (e) {
+                console.error('回放agent运行失败:', e);
             }
         }
 
@@ -113,6 +204,7 @@
             const session = sessions.find(s => s.id === sessionId);
             document.getElementById('chatTitle').textContent = session?.title || '未命名会话';
             loadMessages();
+            loadAgentRuns();
             renderSessionList();
         }
 
@@ -149,8 +241,10 @@
         // 发送消息
         async function sendMessage() {
             const input = document.getElementById('messageInput');
+            const mode = document.getElementById('chatMode').value;
             const content = input.value.trim();
             if (!content) return;
+            if (currentAbortController) return;
 
             // 如果是临时会话，先创建会话
             if (currentSessionId.startsWith('temp-')) {
@@ -160,32 +254,134 @@
             // 添加用户消息到界面
             addMessageToUI('user', content);
             input.value = '';
+            setRequestRunning(true);
 
+            currentAbortController = new AbortController();
             try {
-                const res = await fetch(`${API_BASE}/llm/chat`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        session_id: currentSessionId,
-                        user_id: 'web-user',
-                        input: content
-                    })
-                });
-
-                const data = await res.json();
-                if (data.code === 200) {
-                    const resp = data.data;
-                    addMessageToUI('assistant', resp.output);
-                    
-                    // 如果是新会话，刷新会话列表
-                    if (!sessions.find(s => s.id === currentSessionId)) {
-                        loadSessions();
-                    }
+                if (mode === 'agent') {
+                    await sendAgentMessage(content, currentAbortController.signal);
                 } else {
-                    addMessageToUI('assistant', `错误: ${data.msg}`);
+                    await sendChatMessage(content, currentAbortController.signal);
                 }
             } catch (e) {
-                addMessageToUI('assistant', `网络错误: ${e.message}`);
+                if (e.name !== 'AbortError') {
+                    addMessageToUI('assistant', `网络错误: ${e.message}`);
+                } else {
+                    addMessageToUI('assistant', '已终止当前请求');
+                }
+            } finally {
+                currentAbortController = null;
+                setRequestRunning(false);
+            }
+        }
+
+        async function sendChatMessage(content, signal) {
+            const res = await fetch(`${API_BASE}/llm/chat`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    session_id: currentSessionId,
+                    user_id: 'web-user',
+                    input: content
+                }),
+                signal
+            });
+            const data = await res.json();
+            if (data.code === 200) {
+                const resp = data.data;
+                addMessageToUI('assistant', resp.output);
+                if (!sessions.find(s => s.id === currentSessionId)) {
+                    loadSessions();
+                }
+                return;
+            }
+            addMessageToUI('assistant', `错误: ${data.msg}`);
+        }
+
+        async function sendAgentMessage(content, signal) {
+            startAgentStreamingBubble();
+            const res = await fetch(`${API_BASE}/agent/chat/stream`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    session_id: currentSessionId,
+                    user_id: 'web-user',
+                    input: content
+                }),
+                signal
+            });
+            if (!res.ok || !res.body) {
+                throw new Error(`agent请求失败: ${res.status}`);
+            }
+
+            const reader = res.body.getReader();
+            const decoder = new TextDecoder('utf-8');
+            agentStreamBuffer = '';
+            while (true) {
+                const { value, done } = await reader.read();
+                if (done) break;
+                agentStreamBuffer += decoder.decode(value, { stream: true });
+                consumeAgentEventsFromBuffer();
+            }
+            consumeAgentEventsFromBuffer(true);
+        }
+
+        function handleAgentEvent(evt) {
+            const event = evt?.event;
+            const data = evt?.data || {};
+            if (event === 'status') {
+                appendAgentLine(`[${data.phase}] ${data.message || ''}`);
+                return;
+            }
+            if (event === 'plan') {
+                const tasks = Array.isArray(data.tasks) ? data.tasks : [];
+                appendAgentLine(`已生成计划，共 ${tasks.length} 个任务`);
+                tasks.forEach((t, i) => {
+                    appendAgentLine(`- ${i + 1}. ${t.title || t.id || '未命名任务'}`);
+                });
+                return;
+            }
+            if (event === 'task') {
+                const status = data.status || 'unknown';
+                const taskId = data.task_id || '-';
+                const idx = data.index || '-';
+                const total = data.total || '-';
+                const out = (data.output || '').trim();
+                appendAgentLine(`任务 ${idx}/${total} ${taskId} (${status})`);
+                if (out) appendAgentLine(out);
+                if (data.error) appendAgentLine(`错误: ${data.error}`);
+                return;
+            }
+            if (event === 'step') {
+                const status = data.status || 'unknown';
+                const taskId = data.task_id || '-';
+                const stepId = data.step_id || '-';
+                const idx = data.index || '-';
+                appendAgentLine(`步骤 ${idx} ${stepId} / 任务 ${taskId} (${status})`);
+                if (data.output) appendAgentLine(data.output);
+                if (data.error) appendAgentLine(`错误: ${data.error}`);
+                return;
+            }
+            if (event === 'run') {
+                appendAgentLine(`运行ID: ${data.run_id || '-'} (${data.status || '-'})`);
+                currentAgentRunId = data.run_id || null;
+                loadAgentRuns();
+                return;
+            }
+            if (event === 'final') {
+                appendAgentLine(`最终输出:\n${data.output || ''}`);
+                if (data.session_id) {
+                    currentSessionId = data.session_id;
+                }
+                loadSessions();
+                if (data.run_id) currentAgentRunId = data.run_id;
+                loadAgentRuns();
+                agentStreamingBubble = null;
+                return;
+            }
+            if (event === 'error') {
+                appendAgentLine(`Agent错误: ${data.message || 'unknown'}`);
+                agentStreamingBubble = null;
             }
         }
 
@@ -214,18 +410,120 @@
         // 添加消息到界面
         function addMessageToUI(role, content) {
             const container = document.getElementById('chatMessages');
+            const msgDiv = createMessageBubble(role, content);
+            container.appendChild(msgDiv);
+            container.scrollTop = container.scrollHeight;
+        }
+
+        function createMessageBubble(role, content) {
             const msgDiv = document.createElement('div');
             msgDiv.className = `flex ${role === 'user' ? 'justify-end' : 'justify-start'}`;
             msgDiv.innerHTML = `
                 <div class="max-w-lg ${role === 'user' ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-800'} rounded-lg px-4 py-2">
-                    <div class="text-sm">${content}</div>
+                    <div class="text-sm whitespace-pre-wrap"></div>
                     <div class="text-xs ${role === 'user' ? 'text-blue-100' : 'text-gray-500'} mt-1">
                         ${new Date().toLocaleTimeString()}
                     </div>
                 </div>
             `;
-            container.appendChild(msgDiv);
+            msgDiv.querySelector('.text-sm').textContent = content || '';
+            return msgDiv;
+        }
+
+        function appendAgentLine(line) {
+            if (!agentStreamingBubble) {
+                agentStreamingBubble = createMessageBubble('assistant', '');
+                document.getElementById('chatMessages').appendChild(agentStreamingBubble);
+            }
+            const contentEl = agentStreamingBubble.querySelector('.text-sm');
+            const prev = contentEl.textContent || '';
+            contentEl.textContent = prev ? `${prev}\n${line}` : line;
+            const container = document.getElementById('chatMessages');
             container.scrollTop = container.scrollHeight;
+        }
+
+        function startAgentStreamingBubble() {
+            agentStreamingBubble = createMessageBubble('assistant', 'Agent处理中...');
+            document.getElementById('chatMessages').appendChild(agentStreamingBubble);
+            const container = document.getElementById('chatMessages');
+            container.scrollTop = container.scrollHeight;
+        }
+
+        function consumeAgentEventsFromBuffer(flush = false) {
+            const parsed = extractJSONObjects(agentStreamBuffer, flush);
+            agentStreamBuffer = parsed.rest;
+            for (const raw of parsed.objects) {
+                let evt;
+                try {
+                    evt = JSON.parse(raw);
+                } catch {
+                    continue;
+                }
+                handleAgentEvent(evt);
+            }
+        }
+
+        function extractJSONObjects(buffer, flush) {
+            const objects = [];
+            let depth = 0;
+            let inString = false;
+            let escaped = false;
+            let start = -1;
+            let lastConsumed = 0;
+
+            for (let i = 0; i < buffer.length; i++) {
+                const ch = buffer[i];
+                if (inString) {
+                    if (escaped) {
+                        escaped = false;
+                    } else if (ch === '\\') {
+                        escaped = true;
+                    } else if (ch === '"') {
+                        inString = false;
+                    }
+                    continue;
+                }
+                if (ch === '"') {
+                    inString = true;
+                    continue;
+                }
+                if (ch === '{') {
+                    if (depth === 0) start = i;
+                    depth++;
+                    continue;
+                }
+                if (ch === '}') {
+                    if (depth > 0) depth--;
+                    if (depth === 0 && start >= 0) {
+                        objects.push(buffer.slice(start, i + 1));
+                        lastConsumed = i + 1;
+                        start = -1;
+                    }
+                }
+            }
+
+            let rest = buffer.slice(lastConsumed);
+            if (flush && depth === 0 && rest.trim() === '') {
+                rest = '';
+            }
+            return { objects, rest };
+        }
+
+        function setRequestRunning(running) {
+            const stopBtn = document.getElementById('stopBtn');
+            if (running) {
+                stopBtn.classList.remove('hidden');
+                return;
+            }
+            stopBtn.classList.add('hidden');
+        }
+
+        function stopCurrentRequest() {
+            if (currentAbortController) {
+                currentAbortController.abort();
+            }
+            agentStreamingBubble = null;
+            agentStreamBuffer = '';
         }
 
         // 键盘事件

@@ -26,18 +26,19 @@ func (ch *CinyuHandlers) RegisterHandlers(engine *gin.Engine) {
 	if config.GlobalConfig != nil && config.GlobalConfig.Server.APIPrefix != "" {
 		apiPrefix = config.GlobalConfig.Server.APIPrefix
 	}
-	
+
 	r := engine.Group(apiPrefix)
 
 	// Register Global Singleton DB
 	r.Use(middleware.InjectDB(ch.db))
 
 	// 信号连接已在main.go中初始化，这里不再重复初始化
-	
+
 	// LLM 聊天接口
 	r.POST("/llm/chat", ch.LLMChat)
 	r.POST("/llm/chat/stream", ch.LLMChatStream)
-	
+	r.POST("/agent/chat/stream", ch.AgentChatStream)
+
 	// 数据查询接口
 	dataAPI := NewLLMDataAPI(ch.db)
 	r.GET("/llm/sessions", dataAPI.GetSessions)
@@ -45,4 +46,7 @@ func (ch *CinyuHandlers) RegisterHandlers(engine *gin.Engine) {
 	r.GET("/llm/sessions/:sessionId/messages", dataAPI.GetSessionMessages)
 	r.GET("/llm/messages", dataAPI.GetMessages)
 	r.GET("/llm/usage", dataAPI.GetUsage)
+	r.GET("/agent/sessions/:sessionId/runs", dataAPI.GetAgentRunsBySession)
+	r.GET("/agent/runs/:runId", dataAPI.GetAgentRunDetail)
+	r.GET("/agent/runs/:runId/steps", dataAPI.GetAgentRunSteps)
 }

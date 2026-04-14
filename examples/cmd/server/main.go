@@ -49,54 +49,54 @@ func initSignalConnections(db *gorm.DB) {
 		if !ok {
 			return
 		}
-		
+
 		requestID := asString(usageInfo["request_id"])
 		if requestID == "" {
 			return
 		}
-		
+
 		// 检查是否已存在相同 request_id 的记录
 		var existingUsage models.LLMUsage
 		if err := db.Where("request_id = ?", requestID).First(&existingUsage).Error; err == nil {
 			// 记录已存在，跳过插入
 			return
 		}
-		
+
 		usage := &models.LLMUsage{
-			ID:           utils.SnowflakeUtil.GenID(),
-			RequestID:    requestID,
-			SessionID:    asString(usageInfo["session_id"]),
-			UserID:       asString(usageInfo["user_id"]),
-			Provider:     asString(usageInfo["provider"]),
-			Model:        asString(usageInfo["model"]),
-			BaseURL:      asString(usageInfo["base_url"]),
-			RequestType:  asString(usageInfo["request_type"]),
-			
+			ID:          utils.SnowflakeUtil.GenID(),
+			RequestID:   requestID,
+			SessionID:   asString(usageInfo["session_id"]),
+			UserID:      asString(usageInfo["user_id"]),
+			Provider:    asString(usageInfo["provider"]),
+			Model:       asString(usageInfo["model"]),
+			BaseURL:     asString(usageInfo["base_url"]),
+			RequestType: asString(usageInfo["request_type"]),
+
 			// Token统计
 			InputTokens:  asInt(usageInfo["input_tokens"]),
 			OutputTokens: asInt(usageInfo["output_tokens"]),
 			TotalTokens:  asInt(usageInfo["total_tokens"]),
-			
+
 			// 性能指标
-			LatencyMs:    asInt64(usageInfo["latency_ms"]),
-			TTFTMs:       asInt64(usageInfo["ttft_ms"]),
-			TPS:          asFloat64(usageInfo["tps"]),
-			QueueTimeMs:  asInt64(usageInfo["queue_time_ms"]),
-			
+			LatencyMs:   asInt64(usageInfo["latency_ms"]),
+			TTFTMs:      asInt64(usageInfo["ttft_ms"]),
+			TPS:         asFloat64(usageInfo["tps"]),
+			QueueTimeMs: asInt64(usageInfo["queue_time_ms"]),
+
 			// 请求响应内容
 			RequestContent:  asString(usageInfo["request_content"]),
 			ResponseContent: asString(usageInfo["response_content"]),
-			
+
 			// 请求元信息
-			UserAgent:   asString(usageInfo["user_agent"]),
-			IPAddress:   asString(usageInfo["ip_address"]),
-			StatusCode:  asInt(usageInfo["status_code"]),
-			
+			UserAgent:  asString(usageInfo["user_agent"]),
+			IPAddress:  asString(usageInfo["ip_address"]),
+			StatusCode: asInt(usageInfo["status_code"]),
+
 			// 错误信息
 			Success:      asBool(usageInfo["success"]),
 			ErrorCode:    asString(usageInfo["error_code"]),
 			ErrorMessage: asString(usageInfo["error_message"]),
-			
+
 			// 时间戳
 			RequestedAt:  time.Unix(asInt64(usageInfo["requested_at"])/1000, 0),
 			StartedAt:    time.Unix(asInt64(usageInfo["started_at"])/1000, 0),
@@ -227,6 +227,8 @@ func main() {
 			&models.ChatSession{},
 			&models.ChatMessage{},
 			&models.LLMUsage{},
+			&models.AgentRun{},
+			&models.AgentStep{},
 		},
 	})
 	db, err := bs.SetupDatabase()

@@ -50,6 +50,11 @@ type LLMConfig struct {
 	Model              string `env:"LLM_MODEL"`
 	MaxSessionMessages int    `env:"LLM_MAX_SESSION_MESSAGES"`
 	SummaryModel       string `env:"LLM_SUMMARY_MODEL"`
+	AgentFastModel     string `env:"LLM_AGENT_FAST_MODEL"`
+	AgentStrongModel   string `env:"LLM_AGENT_STRONG_MODEL"`
+	AgentMaxSteps      int    `env:"LLM_AGENT_MAX_STEPS"`
+	AgentMaxCostTokens int    `env:"LLM_AGENT_MAX_COST_TOKENS"`
+	AgentMaxDurationS  int    `env:"LLM_AGENT_MAX_DURATION_SECONDS"`
 }
 
 // StorageConfig storage configuration
@@ -98,6 +103,11 @@ func Load() error {
 				Model:              getStringOrDefault("LLM_MODEL", "gpt-4o-mini"),
 				MaxSessionMessages: getIntOrDefault("LLM_MAX_SESSION_MESSAGES", 10),
 				SummaryModel:       getStringOrDefault("LLM_SUMMARY_MODEL", ""),
+				AgentFastModel:     getStringOrDefault("LLM_AGENT_FAST_MODEL", "qwen-plus"),
+				AgentStrongModel:   getStringOrDefault("LLM_AGENT_STRONG_MODEL", "qwen-plus"),
+				AgentMaxSteps:      getIntOrDefault("LLM_AGENT_MAX_STEPS", 12),
+				AgentMaxCostTokens: getIntOrDefault("LLM_AGENT_MAX_COST_TOKENS", 50000),
+				AgentMaxDurationS:  getIntOrDefault("LLM_AGENT_MAX_DURATION_SECONDS", 120),
 			},
 			Storage: StorageConfig{
 				BaseURL:   getStringOrDefault("LINGSTORAGE_BASE_URL", "https://api.lingstorage.com"),

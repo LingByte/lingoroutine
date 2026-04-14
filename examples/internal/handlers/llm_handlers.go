@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"strings"
@@ -21,6 +22,14 @@ type llmChatRequest struct {
 	UserID    string `json:"user_id"`
 	Input     string `json:"input"`
 	Model     string `json:"model"`
+}
+
+type agentChatRequest struct {
+	SessionID string `json:"session_id"`
+	UserID    string `json:"user_id"`
+	Input     string `json:"input"`
+	Model     string `json:"model"`
+	MaxTasks  int    `json:"max_tasks"`
 }
 
 type llmChatResponse struct {
@@ -206,6 +215,138 @@ func (ch *CinyuHandlers) LLMChat(c *gin.Context) {
 
 func (ch *CinyuHandlers) LLMChatStream(c *gin.Context) {
 	response.FailWithCode(c, http.StatusNotImplemented, "not implemented", nil)
+}
+
+func (ch *CinyuHandlers) AgentChatStream(c *gin.Context) {
+	var req agentChatRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.FailWithCode(c, 400, "invalid request", gin.H{"error": err.Error()})
+		return
+	}
+	input := strings.TrimSpace(req.Input)
+	if input == "" {
+		response.FailWithCode(c, 400, "input is required", nil)
+		return
+	}
+	sessionID := strings.TrimSpace(req.SessionID)
+	if sessionID == "" {
+		sessionID = utils.SnowflakeUtil.GenID()
+	}
+	userID := strings.TrimSpace(req.UserID)
+	if userID == "" {
+		userID = "web-user"
+	}
+
+	provider := "openai"
+	apiKey := ""
+	baseURL := "https://api.openai.com/v1"
+	model := "qwen-plus"
+	fastModel := model
+	strongModel := model
+	maxSteps := 12
+	maxCostTokens := 12000
+	maxDuration := 120 * time.Second
+	if config.GlobalConfig != nil {
+		llmConf := config.GlobalConfig.Services.LLM
+		if strings.TrimSpace(llmConf.Provider) != "" {
+			provider = strings.TrimSpace(llmConf.Provider)
+		}
+		if strings.TrimSpace(llmConf.APIKey) != "" {
+			apiKey = strings.TrimSpace(llmConf.APIKey)
+		}
+		if strings.TrimSpace(llmConf.BaseURL) != "" {
+			baseURL = strings.TrimSpace(llmConf.BaseURL)
+		}
+		if strings.TrimSpace(req.Model) != "" {
+			model = strings.TrimSpace(req.Model)
+		} else if strings.TrimSpace(llmConf.Model) != "" {
+			model = strings.TrimSpace(llmConf.Model)
+		}
+		if strings.TrimSpace(llmConf.AgentFastModel) != "" {
+			fastModel = strings.TrimSpace(llmConf.AgentFastModel)
+		}
+		if strings.TrimSpace(llmConf.AgentStrongModel) != "" {
+			strongModel = strings.TrimSpace(llmConf.AgentStrongModel)
+		}
+		if llmConf.AgentMaxSteps > 0 {
+			maxSteps = llmConf.AgentMaxSteps
+		}
+		if llmConf.AgentMaxCostTokens > 0 {
+			maxCostTokens = llmConf.AgentMaxCostTokens
+		}
+		if llmConf.AgentMaxDurationS > 0 {
+			maxDuration = time.Duration(llmConf.AgentMaxDurationS) * time.Second
+		}
+	}
+	if strings.TrimSpace(fastModel) == "" {
+		fastModel = model
+	}
+	if strings.TrimSpace(strongModel) == "" {
+		strongModel = model
+	}
+
+	h, err := llm.NewLLMProvider(c.Request.Context(), provider, apiKey, baseURL, "")
+	if err != nil {
+		response.Fail(c, "llm provider init failed", gin.H{"error": err.Error()})
+		return
+	}
+	defer h.Interrupt()
+	go func() {
+		<-c.Request.Context().Done()
+		h.Interrupt()
+	}()
+
+	maxTasks := req.MaxTasks
+	if maxTasks <= 0 {
+		maxTasks = 6
+	}
+
+	c.Header("Content-Type", "application/x-ndjson")
+	c.Header("Cache-Control", "no-cache")
+	c.Header("Connection", "keep-alive")
+	c.Status(http.StatusOK)
+	flusher, ok := c.Writer.(http.Flusher)
+	if !ok {
+		response.FailWithCode(c, 500, "streaming unsupported", nil)
+		return
+	}
+
+	writeEvt := func(event string, payload any) bool {
+		line := map[string]any{
+			"event": event,
+			"data":  payload,
+		}
+		b, _ := json.Marshal(line)
+		if _, err := c.Writer.Write(append(b, '\n')); err != nil {
+			return false
+		}
+		flusher.Flush()
+		return true
+	}
+	runtimeCfg := agentRuntimeConfig{
+		FastModel:     fastModel,
+		StrongModel:   strongModel,
+		MaxTasks:      maxTasks,
+		MaxSteps:      maxSteps,
+		MaxCostTokens: maxCostTokens,
+		MaxDuration:   maxDuration,
+	}
+	runID, finalText, runErr := ch.runAgentRuntime(c.Request.Context(), h, sessionID, userID, input, runtimeCfg, writeEvt)
+	if finalText == "" {
+		finalText = "Agent 执行完成，但没有可展示的输出。"
+	}
+	llm.CreateSession(sessionID, userID, "Agent会话", h.Provider(), model, "")
+	llm.CreateMessage(utils.SnowflakeUtil.GenID(), sessionID, "user", input, 0, model, h.Provider(), "")
+	llm.CreateMessage(utils.SnowflakeUtil.GenID(), sessionID, "assistant", finalText, 0, model, h.Provider(), "")
+	_ = writeEvt("final", gin.H{"session_id": sessionID, "run_id": runID, "output": finalText, "error": errString(runErr)})
+	_ = writeEvt("done", gin.H{"ok": runErr == nil, "run_id": runID})
+}
+
+func errString(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
 }
 
 func (ch *CinyuHandlers) buildSessionMemory(h llm.LLMHandler, sessionID, userID, model string, maxSessionMessages int, summaryModel string) ([]llm.ChatMessage, error) {
