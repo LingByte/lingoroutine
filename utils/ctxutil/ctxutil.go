@@ -1,8 +1,5 @@
 package ctxutil
 
-// Copyright (c) 2026 LingByte
-// SPDX-License-Identifier: MIT
-
 import (
 	"context"
 	"time"
@@ -10,6 +7,56 @@ import (
 	"github.com/LingByte/lingoroutine/utils"
 	"github.com/gin-gonic/gin"
 )
+
+// Copyright (c) 2026 LingByte
+// SPDX-License-Identifier: MIT
+
+// Golang中所谓的上下文Context是在一组协程中传递信号量，用于进行超时,取消和少量数据的传递
+// 官方是如此介绍的，Context 用于在 API 边界 以及进程之间传递截止时间、取消信号和其他请求级别的值。
+// 进入服务器的请求应当创建一个 [Context]，而对服务器的外发调用
+// 应当接收一个 Context。它们之间的函数调用链必须传播该 Context，
+// 也可以选择使用 [WithCancel]、[WithDeadline]、[WithTimeout]
+// 或 [WithValue] 创建的派生 Context 替换它。
+//
+// 取消一个 Context 表示代表其执行的工作应当停止。
+// 带有截止时间的 Context 会在截止时间到达后被取消。
+// 当一个 Context 被取消时，从它派生的所有 Context 也会被取消。
+
+// [WithCancel]、[WithDeadline] 和 [WithTimeout] 函数接收一个
+// Context（父上下文）并返回一个派生 Context（子上下文）
+// 以及一个 [CancelFunc]。直接调用 CancelFunc 会取消该子上下文
+// 及其所有后代，移除父上下文对子上下文的引用，并停止
+// 所有关联的定时器。如果不调用 CancelFunc，会导致子上下文
+// 及其后代泄漏，直到父上下文被取消。go vet 工具会检查
+// CancelFunc 是否在所有控制流路径上都被使用。
+//
+// [WithCancelCause]、[WithDeadlineCause] 和 [WithTimeoutCause]
+// 函数返回一个 [CancelCauseFunc]，它接收一个 error 并将其记录
+// 为取消原因。在已取消的上下文或其任意后代上调用 [Cause]
+// 可以获取该原因。如果未指定原因，Cause(ctx) 返回的值与 ctx.Err() 相同。
+//
+// 使用 Context 的程序应遵循以下规则，以保持各包之间接口的一致性，
+// 并使静态分析工具能够检查上下文传播：
+//
+// 不要将 Context 存储在结构体类型内部；相反，将 Context
+// 显式传递给每个需要它的函数。更多讨论见
+// https://go.dev/blog/context-and-structs。Context 应作为第一个参数，
+// 通常命名为 ctx：
+//
+//	func DoSomething(ctx context.Context, arg Arg) error {
+//		// ... 使用 ctx ...
+//	}
+//
+// 即使函数允许，也不要传递 nil [Context]。如果不确定使用哪个 Context，
+// 请传递 [context.TODO]。
+//
+// 仅将 context Values 用于跨进程和 API 传递的请求级数据，
+// 不要用于向函数传递可选参数。
+//
+// 同一个 Context 可以传递给运行在不同 goroutine 中的函数；
+// Context 可安全地被多个 goroutine 同时使用。
+//
+// 有关使用 Context 的服务器示例代码，参见 https://go.dev/blog/context。
 
 // ContextKey 自定义context key类型，避免key冲突
 type ContextKey string

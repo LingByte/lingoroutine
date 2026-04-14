@@ -13,8 +13,7 @@ import (
 	"strings"
 	"time"
 
-	"go.uber.org/zap"
-)
+	)
 
 type AlibabaHandler struct {
 	ctx          context.Context
@@ -23,7 +22,6 @@ type AlibabaHandler struct {
 	endpoint     string
 	systemPrompt string
 	client       *http.Client
-	mem          *asyncTurnMemory
 	interruptCh  chan struct{}
 }
 
@@ -52,21 +50,24 @@ func NewAlibabaHandler(ctx context.Context, llmOptions *LLMOptions) (*AlibabaHan
 	if appID == "" {
 		return nil, errors.New("alibaba app id is required (set LLM BaseURL as app id or ALIBABA_APP_ID)")
 	}
-	log := zap.NewNop()
-	if llmOptions != nil && llmOptions.Logger != nil {
-		log = llmOptions.Logger
-	}
-	return &AlibabaHandler{
+		return &AlibabaHandler{
 		ctx:          ctx,
 		apiKey:       strings.TrimSpace(opts.ApiKey),
 		appID:        appID,
 		endpoint:     endpoint,
 		systemPrompt: opts.SystemPrompt,
 		client:       &http.Client{Timeout: timeout},
-		mem:          newAsyncTurnMemory(ctx, log),
 		interruptCh:  make(chan struct{}, 1),
 	}, nil
 }
+
+func (h *AlibabaHandler) Interrupt() {
+	select {
+	case h.interruptCh <- struct{}{}:
+	default:
+	}
+}
+
 
 func (h *AlibabaHandler) Query(text, model string) (string, error) {
 	resp, err := h.QueryWithOptions(text, &QueryOptions{Model: model})
@@ -88,8 +89,6 @@ func (h *AlibabaHandler) QueryWithOptions(text string, options *QueryOptions) (*
 		return nil, errors.New("interrupted")
 	default:
 	}
-	model := strings.TrimSpace(options.Model)
-
 	var rewrite *QueryRewrite
 	promptUser := text
 	if options.EnableQueryRewrite {
@@ -116,7 +115,7 @@ func (h *AlibabaHandler) QueryWithOptions(text string, options *QueryOptions) (*
 
 	reqBody := map[string]any{
 		"input": map[string]string{
-			"prompt": h.composePrompt(promptUser, options),
+			"prompt": promptUser,
 		},
 		"parameters": map[string]any{},
 	}
@@ -149,7 +148,6 @@ func (h *AlibabaHandler) QueryWithOptions(text string, options *QueryOptions) (*
 		return nil, err
 	}
 	answer := strings.TrimSpace(parsed.Output.Text)
-	h.mem.appendPairAndMaybeSummarize(h.ctx, model, promptUser, answer, h.summarizeAlibaba)
 	return &QueryResponse{
 		Provider:  h.Provider(),
 		Model:     options.Model,
@@ -177,68 +175,6 @@ func (h *AlibabaHandler) QueryStream(text string, options *QueryOptions, callbac
 
 func (h *AlibabaHandler) Provider() string { return LLM_ALIBABA }
 
-func (h *AlibabaHandler) Interrupt() {
-	select {
-	case h.interruptCh <- struct{}{}:
-	default:
-	}
-}
-
-func (h *AlibabaHandler) ResetMemory() {
-	if h.mem != nil {
-		h.mem.reset()
-	}
-}
-
-func (h *AlibabaHandler) SummarizeMemory(model string) (string, error) {
-	if h.mem == nil {
-		return "", nil
-	}
-	return h.mem.summarizeMemorySync(h.ctx, strings.TrimSpace(model), h.summarizeAlibaba)
-}
-
-func (h *AlibabaHandler) SetMaxMemoryMessages(n int) {
-	if h.mem != nil {
-		h.mem.setMaxMemoryMessages(n)
-	}
-}
-
-func (h *AlibabaHandler) GetMaxMemoryMessages() int {
-	if h.mem == nil {
-		return defaultMaxMemoryMessages
-	}
-	return h.mem.getMaxMemoryMessages()
-}
-
-func (h *AlibabaHandler) composePrompt(currentUser string, opts *QueryOptions) string {
-	currentUser = strings.TrimSpace(currentUser)
-	var b strings.Builder
-	if s := appendEmotionalStyle(strings.TrimSpace(h.systemPrompt), opts); s != "" {
-		b.WriteString(s)
-		b.WriteString("\n\n")
-	}
-	if sum := h.mem.summaryText(); sum != "" {
-		b.WriteString("Conversation summary so far: ")
-		b.WriteString(sum)
-		b.WriteString("\n\n")
-	}
-	for _, t := range h.mem.snapshotTurns() {
-		b.WriteString(t.Role)
-		b.WriteString(": ")
-		b.WriteString(t.Content)
-		b.WriteString("\n")
-	}
-	if b.Len() > 0 {
-		b.WriteString("\n")
-	}
-	b.WriteString("用户输入：")
-	b.WriteString(currentUser)
-	out := strings.TrimSpace(b.String())
-	if out == "" {
-		return currentUser
-	}
-	return out
-}
 
 func (h *AlibabaHandler) rewriteQueryAlibaba(ctx context.Context, text string, options *QueryOptions) (string, error) {
 	if options == nil {
@@ -330,51 +266,5 @@ func (h *AlibabaHandler) expandQueryAlibaba(ctx context.Context, text string, op
 	out := strings.TrimSpace(parsed.Output.Text)
 	expanded, terms := ExpandedQueryFromModelAnswer(text, out, maxTerms, sep)
 	return expanded, terms, nil
-}
-
-func (h *AlibabaHandler) summarizeAlibaba(ctx context.Context, model string, transcript string, previousSummary string) (string, error) {
-	_ = model
-	system := "You are a conversation summarizer. Produce a concise, factual summary of the conversation so far. Preserve user preferences, facts, decisions, and open TODOs. Do not include any markdown."
-	user := ""
-	if strings.TrimSpace(previousSummary) != "" {
-		user += "Existing summary:\n" + previousSummary + "\n\n"
-	}
-	user += "Conversation transcript:\n" + transcript + "\n\nReturn an updated summary in plain text."
-	prompt := system + "\n\n" + user
-	reqBody := map[string]any{
-		"input": map[string]string{
-			"prompt": prompt,
-		},
-		"parameters": map[string]any{},
-	}
-	b, err := json.Marshal(reqBody)
-	if err != nil {
-		return "", err
-	}
-	url := fmt.Sprintf("%s/api/v1/apps/%s/completion", strings.TrimRight(h.endpoint, "/"), h.appID)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(b))
-	if err != nil {
-		return "", err
-	}
-	req.Header.Set("Authorization", "Bearer "+h.apiKey)
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := h.client.Do(req)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-	body, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return "", fmt.Errorf("alibaba summarize failed: status=%d body=%s", resp.StatusCode, string(body))
-	}
-	var parsed struct {
-		Output struct {
-			Text string `json:"text"`
-		} `json:"output"`
-	}
-	if err := json.Unmarshal(body, &parsed); err != nil {
-		return "", err
-	}
-	return strings.TrimSpace(parsed.Output.Text), nil
 }
 

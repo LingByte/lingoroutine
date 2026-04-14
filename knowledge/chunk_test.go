@@ -35,14 +35,7 @@ func (f *fakeChunkLLM) QueryStream(text string, options *llm.QueryOptions, callb
 	}
 	return &llm.QueryResponse{Choices: []llm.QueryChoice{{Index: 0, Content: f.resp}}}, f.err
 }
-func (f *fakeChunkLLM) Interrupt()       {}
-func (f *fakeChunkLLM) ResetMemory()     {}
-func (f *fakeChunkLLM) SummarizeMemory(model string) (string, error) {
-	_ = model
-	return "", nil
-}
-func (f *fakeChunkLLM) SetMaxMemoryMessages(n int) { _ = n }
-func (f *fakeChunkLLM) GetMaxMemoryMessages() int  { return 0 }
+func (f *fakeChunkLLM) Interrupt() {}
 
 var _ llm.LLMHandler = (*fakeChunkLLM)(nil)
 

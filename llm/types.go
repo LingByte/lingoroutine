@@ -52,11 +52,6 @@ type FewShotExample struct {
 	Assistant string
 }
 
-type llmMemoryMessage struct {
-	Role    string
-	Content string
-}
-
 type QueryOptions struct {
 	Model                string
 	N                    int
@@ -173,14 +168,6 @@ type LLMHandler interface {
 	Provider() string
 
 	Interrupt()
-
-	ResetMemory()
-
-	SummarizeMemory(model string) (string, error)
-
-	SetMaxMemoryMessages(n int)
-
-	GetMaxMemoryMessages() int
 }
 
 func GenerateLingRequestID() string {

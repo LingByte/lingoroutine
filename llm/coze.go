@@ -9,8 +9,7 @@ import (
 	"time"
 
 	"github.com/coze-dev/coze-go"
-	"go.uber.org/zap"
-)
+	)
 
 type CozeHandler struct {
 	client       coze.CozeAPI
@@ -18,7 +17,6 @@ type CozeHandler struct {
 	botID        string
 	userID       string
 	systemPrompt string
-	mem          *asyncTurnMemory
 	interruptCh  chan struct{}
 }
 
@@ -49,17 +47,12 @@ func NewCozeHandler(ctx context.Context, llmOptions *LLMOptions) (*CozeHandler, 
 	if strings.TrimSpace(cfg.BaseURL) != "" {
 		client = coze.NewCozeAPI(authClient, coze.WithBaseURL(strings.TrimSpace(cfg.BaseURL)))
 	}
-	log := zap.NewNop()
-	if llmOptions != nil && llmOptions.Logger != nil {
-		log = llmOptions.Logger
-	}
-	return &CozeHandler{
+		return &CozeHandler{
 		client:       client,
 		ctx:          ctx,
 		botID:        cfg.BotID,
 		userID:       cfg.UserID,
 		systemPrompt: opts.SystemPrompt,
-		mem:          newAsyncTurnMemory(ctx, log),
 		interruptCh:  make(chan struct{}, 1),
 	}, nil
 }
@@ -79,8 +72,6 @@ func (h *CozeHandler) QueryWithOptions(text string, options *QueryOptions) (*Que
 	if options == nil {
 		options = &QueryOptions{}
 	}
-	model := strings.TrimSpace(options.Model)
-
 	var rewrite *QueryRewrite
 	if options.EnableQueryRewrite {
 		before := text
@@ -142,10 +133,8 @@ func (h *CozeHandler) QueryWithOptions(text string, options *QueryOptions) (*Que
 		}
 	}
 	answer := strings.TrimSpace(out.String())
-	h.mem.appendPairAndMaybeSummarize(ctx, model, text, answer, h.summarizeCoze)
-	return &QueryResponse{
-		Provider:  h.Provider(),
-		Model:     options.Model,
+		return &QueryResponse{
+			Model:     options.Model,
 		Choices:   []QueryChoice{{Index: 0, Content: answer, FinishReason: "stop"}},
 		Expansion: expansion,
 		Rewrite:   rewrite,
@@ -156,8 +145,7 @@ func (h *CozeHandler) QueryStream(text string, options *QueryOptions, callback f
 	if options == nil {
 		options = &QueryOptions{}
 	}
-	model := strings.TrimSpace(options.Model)
-	var streamRewrite *QueryRewrite
+		var streamRewrite *QueryRewrite
 	if options.EnableQueryRewrite {
 		before := text
 		rw, err := h.rewriteQueryCoze(h.ctx, before, options)
@@ -227,10 +215,8 @@ func (h *CozeHandler) QueryStream(text string, options *QueryOptions, callback f
 		}
 	}
 	answer := strings.TrimSpace(out.String())
-	h.mem.appendPairAndMaybeSummarize(ctx, model, text, answer, h.summarizeCoze)
-	return &QueryResponse{
-		Provider:  h.Provider(),
-		Model:     options.Model,
+		return &QueryResponse{
+			Model:     options.Model,
 		Choices:   []QueryChoice{{Index: 0, Content: answer, FinishReason: "stop"}},
 		Rewrite:   streamRewrite,
 		Expansion: streamExpansion,
@@ -246,31 +232,7 @@ func (h *CozeHandler) Interrupt() {
 	}
 }
 
-func (h *CozeHandler) ResetMemory() {
-	if h.mem != nil {
-		h.mem.reset()
-	}
-}
 
-func (h *CozeHandler) SummarizeMemory(model string) (string, error) {
-	if h.mem == nil {
-		return "", nil
-	}
-	return h.mem.summarizeMemorySync(h.ctx, strings.TrimSpace(model), h.summarizeCoze)
-}
-
-func (h *CozeHandler) SetMaxMemoryMessages(n int) {
-	if h.mem != nil {
-		h.mem.setMaxMemoryMessages(n)
-	}
-}
-
-func (h *CozeHandler) GetMaxMemoryMessages() int {
-	if h.mem == nil {
-		return defaultMaxMemoryMessages
-	}
-	return h.mem.getMaxMemoryMessages()
-}
 
 func (h *CozeHandler) cozeMessagesForChat(userText string, opts *QueryOptions) []coze.Message {
 	out := make([]coze.Message, 0, 8)
@@ -279,16 +241,6 @@ func (h *CozeHandler) cozeMessagesForChat(userText string, opts *QueryOptions) [
 		out = append(out, coze.Message{Role: coze.MessageRoleUser, Content: "System: " + appendEmotionalStyle(sysCore, opts)})
 	} else if emotionalToneEnabled(opts) {
 		out = append(out, coze.Message{Role: coze.MessageRoleUser, Content: "System: " + appendEmotionalStyle("", opts)})
-	}
-	if sum := h.mem.summaryText(); sum != "" {
-		out = append(out, coze.Message{Role: coze.MessageRoleUser, Content: "Conversation summary so far: " + sum})
-	}
-	for _, t := range h.mem.snapshotTurns() {
-		role := coze.MessageRoleUser
-		if t.Role == "assistant" {
-			role = coze.MessageRoleAssistant
-		}
-		out = append(out, coze.Message{Role: role, Content: t.Content})
 	}
 	out = append(out, coze.Message{Role: coze.MessageRoleUser, Content: userText})
 	return out

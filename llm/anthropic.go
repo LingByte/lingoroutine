@@ -12,15 +12,13 @@ import (
 	"strings"
 	"time"
 
-	"go.uber.org/zap"
-)
+	)
 
 type AnthropicHandler struct {
 	ctx          context.Context
 	baseURL      string
 	apiKey       string
 	systemPrompt string
-	mem          *asyncTurnMemory
 	interruptCh  chan struct{}
 	client       *http.Client
 }
@@ -33,16 +31,11 @@ func NewAnthropicHandler(ctx context.Context, llmOptions *LLMOptions) (*Anthropi
 	if strings.TrimSpace(opts.BaseURL) == "" {
 		opts.BaseURL = "https://api.anthropic.com"
 	}
-	log := zap.NewNop()
-	if llmOptions != nil && llmOptions.Logger != nil {
-		log = llmOptions.Logger
-	}
-	return &AnthropicHandler{
+		return &AnthropicHandler{
 		ctx:          ctx,
 		baseURL:      strings.TrimRight(strings.TrimSpace(opts.BaseURL), "/"),
 		apiKey:       strings.TrimSpace(opts.ApiKey),
 		systemPrompt: opts.SystemPrompt,
-		mem:          newAsyncTurnMemory(ctx, log),
 		interruptCh:  make(chan struct{}, 1),
 		client:       &http.Client{Timeout: 120 * time.Second},
 	}, nil
@@ -101,14 +94,14 @@ func (h *AnthropicHandler) QueryWithOptions(text string, options *QueryOptions) 
 		}
 	}
 
-	userMsgs := h.buildAnthropicMessages(text)
+	userMsgs := []map[string]any{{"role": "user", "content": text}}
 	reqBody := map[string]any{
 		"model":       model,
 		"max_tokens":  max(256, options.MaxTokens),
 		"temperature": options.Temperature,
 		"messages":    userMsgs,
 	}
-	if sys := h.mem.mergedSystemPrompt(appendEmotionalStyle(h.systemPrompt, options)); strings.TrimSpace(sys) != "" {
+	if sys := appendEmotionalStyle(h.systemPrompt, options); strings.TrimSpace(sys) != "" {
 		reqBody["system"] = sys
 	}
 	raw, err := h.doAnthropic(reqCtx, reqBody)
@@ -140,7 +133,6 @@ func (h *AnthropicHandler) QueryWithOptions(text string, options *QueryOptions) 
 	if reason == "" {
 		reason = "stop"
 	}
-	h.mem.appendPairAndMaybeSummarize(reqCtx, model, text, answer, h.summarizeConversationAnthropic)
 	return &QueryResponse{
 		Provider:  h.Provider(),
 		Model:     model,
@@ -200,10 +192,10 @@ func (h *AnthropicHandler) QueryStream(text string, options *QueryOptions, callb
 		"model":       model,
 		"max_tokens":  max(256, options.MaxTokens),
 		"temperature": options.Temperature,
-		"messages":    h.buildAnthropicMessages(text),
+		"messages":    []map[string]any{{"role": "user", "content": text}},
 		"stream":      true,
 	}
-	if sys := h.mem.mergedSystemPrompt(appendEmotionalStyle(h.systemPrompt, options)); strings.TrimSpace(sys) != "" {
+	if sys := appendEmotionalStyle(h.systemPrompt, options); strings.TrimSpace(sys) != "" {
 		reqBody["system"] = sys
 	}
 	b, _ := json.Marshal(reqBody)
@@ -264,7 +256,6 @@ func (h *AnthropicHandler) QueryStream(text string, options *QueryOptions, callb
 		}
 	}
 	answer := strings.TrimSpace(out.String())
-	h.mem.appendPairAndMaybeSummarize(reqCtx, model, text, answer, h.summarizeConversationAnthropic)
 	return &QueryResponse{
 		Provider:  h.Provider(),
 		Model:     model,
@@ -283,101 +274,6 @@ func (h *AnthropicHandler) Interrupt() {
 	}
 }
 
-func (h *AnthropicHandler) ResetMemory() {
-	if h.mem != nil {
-		h.mem.reset()
-	}
-}
-
-func (h *AnthropicHandler) SummarizeMemory(model string) (string, error) {
-	if h.mem == nil {
-		return "", nil
-	}
-	if strings.TrimSpace(model) == "" {
-		model = "claude-3-5-sonnet-20241022"
-	}
-	return h.mem.summarizeMemorySync(h.ctx, model, h.summarizeConversationAnthropic)
-}
-
-func (h *AnthropicHandler) SetMaxMemoryMessages(n int) {
-	if h.mem != nil {
-		h.mem.setMaxMemoryMessages(n)
-	}
-}
-
-func (h *AnthropicHandler) GetMaxMemoryMessages() int {
-	if h.mem == nil {
-		return defaultMaxMemoryMessages
-	}
-	return h.mem.getMaxMemoryMessages()
-}
-
-func (h *AnthropicHandler) buildAnthropicMessages(userText string) []map[string]any {
-	turns := h.mem.snapshotTurns()
-	msgs := make([]map[string]any, 0, len(turns)+1)
-	for _, m := range turns {
-		role := "user"
-		if m.Role == "assistant" {
-			role = "assistant"
-		}
-		msgs = append(msgs, map[string]any{
-			"role": role,
-			"content": []map[string]string{
-				{"type": "text", "text": m.Content},
-			},
-		})
-	}
-	msgs = append(msgs, map[string]any{
-		"role": "user",
-		"content": []map[string]string{
-			{"type": "text", "text": userText},
-		},
-	})
-	return msgs
-}
-
-func (h *AnthropicHandler) summarizeConversationAnthropic(ctx context.Context, model string, transcript string, previousSummary string) (string, error) {
-	sys := "You are a conversation summarizer. Produce a concise, factual summary of the conversation so far. Preserve user preferences, facts, decisions, and open TODOs. Do not include any markdown."
-	user := ""
-	if strings.TrimSpace(previousSummary) != "" {
-		user += "Existing summary:\n" + previousSummary + "\n\n"
-	}
-	user += "Conversation transcript:\n" + transcript + "\n\nReturn an updated summary in plain text."
-	body := map[string]any{
-		"model":       model,
-		"max_tokens":  512,
-		"temperature": 0,
-		"system":      sys,
-		"messages": []map[string]any{
-			{
-				"role": "user",
-				"content": []map[string]string{
-					{"type": "text", "text": user},
-				},
-			},
-		},
-	}
-	raw, err := h.doAnthropic(ctx, body)
-	if err != nil {
-		return "", err
-	}
-	var parsed struct {
-		Content []struct {
-			Type string `json:"type"`
-			Text string `json:"text"`
-		} `json:"content"`
-	}
-	if err := json.Unmarshal(raw, &parsed); err != nil {
-		return "", err
-	}
-	var b strings.Builder
-	for _, c := range parsed.Content {
-		if c.Type == "text" {
-			b.WriteString(c.Text)
-		}
-	}
-	return strings.TrimSpace(b.String()), nil
-}
 
 func (h *AnthropicHandler) rewriteQueryAnthropic(ctx context.Context, text string, options *QueryOptions) (string, error) {
 	if options == nil {

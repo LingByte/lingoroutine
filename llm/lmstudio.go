@@ -12,15 +12,13 @@ import (
 	"strings"
 	"time"
 
-	"go.uber.org/zap"
-)
+	)
 
 type LMStudioHandler struct {
 	ctx          context.Context
 	baseURL      string
 	apiKey       string
 	systemPrompt string
-	mem          *asyncTurnMemory
 	interruptCh  chan struct{}
 	client       *http.Client
 }
@@ -36,16 +34,11 @@ func NewLMStudioHandler(ctx context.Context, llmOptions *LLMOptions) (*LMStudioH
 	if strings.TrimSpace(opts.ApiKey) == "" {
 		opts.ApiKey = "lmstudio"
 	}
-	log := zap.NewNop()
-	if llmOptions != nil && llmOptions.Logger != nil {
-		log = llmOptions.Logger
-	}
-	return &LMStudioHandler{
+		return &LMStudioHandler{
 		ctx:          ctx,
 		baseURL:      strings.TrimRight(strings.TrimSpace(opts.BaseURL), "/"),
 		apiKey:       strings.TrimSpace(opts.ApiKey),
 		systemPrompt: opts.SystemPrompt,
-		mem:          newAsyncTurnMemory(ctx, log),
 		interruptCh:  make(chan struct{}, 1),
 		client:       &http.Client{Timeout: 120 * time.Second},
 	}, nil
@@ -106,7 +99,7 @@ func (h *LMStudioHandler) QueryWithOptions(text string, options *QueryOptions) (
 
 	body := map[string]any{
 		"model":       model,
-		"messages":    h.mem.buildChatCompletionMessages(appendEmotionalStyle(h.systemPrompt, options), text),
+		"messages":    []map[string]string{{"role": "user", "content": text}},
 		"stream":      false,
 		"temperature": options.Temperature,
 	}
@@ -138,7 +131,6 @@ func (h *LMStudioHandler) QueryWithOptions(text string, options *QueryOptions) (
 			reason = parsed.Choices[0].FinishReason
 		}
 	}
-	h.mem.appendPairAndMaybeSummarize(reqCtx, model, text, content, h.summarizeConversation)
 	return &QueryResponse{
 		Provider:  h.Provider(),
 		Model:     model,
@@ -196,7 +188,7 @@ func (h *LMStudioHandler) QueryStream(text string, options *QueryOptions, callba
 
 	body := map[string]any{
 		"model":       model,
-		"messages":    h.mem.buildChatCompletionMessages(appendEmotionalStyle(h.systemPrompt, options), text),
+		"messages":    []map[string]string{{"role": "user", "content": text}},
 		"stream":      true,
 		"temperature": options.Temperature,
 	}
@@ -260,7 +252,6 @@ func (h *LMStudioHandler) QueryStream(text string, options *QueryOptions, callba
 		}
 	}
 	content := strings.TrimSpace(out.String())
-	h.mem.appendPairAndMaybeSummarize(reqCtx, model, text, content, h.summarizeConversation)
 	return &QueryResponse{
 		Provider:  h.Provider(),
 		Model:     model,
@@ -277,71 +268,6 @@ func (h *LMStudioHandler) Interrupt() {
 	case h.interruptCh <- struct{}{}:
 	default:
 	}
-}
-
-func (h *LMStudioHandler) ResetMemory() {
-	if h.mem != nil {
-		h.mem.reset()
-	}
-}
-
-func (h *LMStudioHandler) SummarizeMemory(model string) (string, error) {
-	if h.mem == nil {
-		return "", nil
-	}
-	if strings.TrimSpace(model) == "" {
-		model = "local-model"
-	}
-	return h.mem.summarizeMemorySync(h.ctx, model, h.summarizeConversation)
-}
-
-func (h *LMStudioHandler) SetMaxMemoryMessages(n int) {
-	if h.mem != nil {
-		h.mem.setMaxMemoryMessages(n)
-	}
-}
-
-func (h *LMStudioHandler) GetMaxMemoryMessages() int {
-	if h.mem == nil {
-		return defaultMaxMemoryMessages
-	}
-	return h.mem.getMaxMemoryMessages()
-}
-
-func (h *LMStudioHandler) summarizeConversation(ctx context.Context, model string, transcript string, previousSummary string) (string, error) {
-	system := "You are a conversation summarizer. Produce a concise, factual summary of the conversation so far. Preserve user preferences, facts, decisions, and open TODOs. Do not include any markdown."
-	user := ""
-	if strings.TrimSpace(previousSummary) != "" {
-		user += "Existing summary:\n" + previousSummary + "\n\n"
-	}
-	user += "Conversation transcript:\n" + transcript + "\n\nReturn an updated summary in plain text."
-	body := map[string]any{
-		"model": model,
-		"messages": []map[string]string{
-			{"role": "system", "content": system},
-			{"role": "user", "content": user},
-		},
-		"stream":      false,
-		"temperature": 0,
-	}
-	raw, err := h.doChatCompletion(ctx, body)
-	if err != nil {
-		return "", err
-	}
-	var parsed struct {
-		Choices []struct {
-			Message struct {
-				Content string `json:"content"`
-			} `json:"message"`
-		} `json:"choices"`
-	}
-	if err := json.Unmarshal(raw, &parsed); err != nil {
-		return "", err
-	}
-	if len(parsed.Choices) == 0 {
-		return "", nil
-	}
-	return strings.TrimSpace(parsed.Choices[0].Message.Content), nil
 }
 
 
